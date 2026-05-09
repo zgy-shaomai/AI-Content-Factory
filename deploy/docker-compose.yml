@@ -1,0 +1,235 @@
+# =============================================================================
+# 服装电商 AI 内容工厂 - Docker Compose
+# =============================================================================
+# 一键部署：docker compose up -d
+# 依赖：先填好同目录 .env（参考 .env.example）
+# 部署目标：Ubuntu 22.04 LTS · 4C8G · Docker 24+ · Compose v2
+# =============================================================================
+
+name: content-factory
+
+networks:
+  cf-net:
+    driver: bridge
+    name: cf-net
+
+volumes:
+  postgres-data:
+    name: cf-postgres-data
+  n8n-data:
+    name: cf-n8n-data
+  redis-data:
+    name: cf-redis-data
+  caddy-data:
+    name: cf-caddy-data
+  caddy-config:
+    name: cf-caddy-config
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 - 任务库 / archive 表 / N8N 元数据
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cf-postgres
+    restart: unless-stopped
+    networks:
+      - cf-net
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TZ}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # 容器首次启动时自动执行 /docker-entrypoint-initdb.d/ 下的 *.sql / *.sh
+      # bootstrap.sh 会把 schemas/postgres-init.sql 复制到 ./initdb/ 下挂载进来
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 - N8N queue mode（防大批量任务卡）
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: cf-redis
+    restart: unless-stopped
+    networks:
+      - cf-net
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD}
+      - --maxmemory
+      - 200mb
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # N8N - 工作流编排（queue mode：main + worker 都在一个容器里跑，简化部署）
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cf-n8n
+    restart: unless-stopped
+    networks:
+      - cf-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # ---- 域名与协议 ----
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}
+      WEBHOOK_URL: https://${N8N_HOST}/
+      N8N_PROXY_HOPS: 1
+      # ---- 时区 / 语言 ----
+      GENERIC_TIMEZONE: ${TZ}
+      TZ: ${TZ}
+      # ---- 加密密钥（必须固定，丢失会导致 credentials 全部失效）----
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      # ---- 任务库（用 Postgres 而非默认 SQLite，多 worker 必须）----
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      # ---- 队列模式（防大批量任务卡死 main 进程）----
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      QUEUE_BULL_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # ---- 用户管理 ----
+      N8N_USER_MANAGEMENT_DISABLED: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      # ---- 日志 ----
+      N8N_LOG_LEVEL: info
+      N8N_LOG_OUTPUT: console
+      # ---- 业务侧环境（被工作流节点引用）----
+      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL}
+      NEWAPI_KEY: ${NEWAPI_KEY}
+      ARK_API_KEY: ${ARK_API_KEY}
+      ARK_REGION: ${ARK_REGION}
+      ARK_ENDPOINT: ${ARK_ENDPOINT}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET}
+      OSS_BUCKET_RAW: ${OSS_BUCKET_RAW}
+      OSS_BUCKET_WORK: ${OSS_BUCKET_WORK}
+      OSS_BUCKET_DELIVER: ${OSS_BUCKET_DELIVER}
+      OSS_REGION: ${OSS_REGION}
+      OSS_ENDPOINT: ${OSS_ENDPOINT}
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_BITABLE_TOKEN: ${FEISHU_BITABLE_TOKEN}
+      FEISHU_ALERT_WEBHOOK: ${FEISHU_ALERT_WEBHOOK}
+      ASR_PROVIDER: ${ASR_PROVIDER}
+      ASR_API_KEY: ${ASR_API_KEY}
+      ASR_ENDPOINT: ${ASR_ENDPOINT}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      # 工作流定义文件挂载（用于版本化 import / 持续更新）
+      - ../n8n/workflows:/workflows:ro
+    expose:
+      - "5678"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+        reservations:
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Caddy - 反向代理 + 自动 HTTPS（Let's Encrypt）
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: cf-caddy
+    restart: unless-stopped
+    networks:
+      - cf-net
+    depends_on:
+      - n8n
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      N8N_HOST: ${N8N_HOST}
+      API_HOST: ${API_HOST}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

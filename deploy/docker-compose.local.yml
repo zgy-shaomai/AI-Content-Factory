@@ -1,0 +1,146 @@
+# =============================================================================
+# 本地演示版 docker-compose（砍掉 Caddy / 域名 / HTTPS / ACME）
+# =============================================================================
+# 用法：
+#   cp .env.example .env.local
+#   # 编辑 .env.local：只需要填 POSTGRES_PASSWORD / N8N_ENCRYPTION_KEY / REDIS_PASSWORD
+#   #                  / ARK_API_KEY / NEWAPI_KEY，其他保留默认或 "local-dev"
+#   docker compose -f docker-compose.local.yml --env-file .env.local up -d
+#
+# 访问：
+#   N8N 编辑器: http://localhost:5678
+#   Postgres:   localhost:55432  (注意：本地版把 PG 也暴露到宿主机，方便用 DBeaver / psql 接)
+#   Redis:      localhost:56379
+#
+# 与生产 docker-compose.yml 的区别：
+#   - 删 Caddy（本地不需要 HTTPS）
+#   - N8N 直接用 http://localhost:5678（不是 https://<domain>）
+#   - 把 PG / Redis 端口暴露到宿主机（方便调试）
+#   - OSS / 飞书 / ASR 凭据可留空（本地 demo 不强依赖）
+# =============================================================================
+
+name: content-factory-local
+
+networks:
+  cf-net:
+    driver: bridge
+    name: cf-net-local
+
+volumes:
+  postgres-data:
+    name: cf-postgres-data-local
+  n8n-data:
+    name: cf-n8n-data-local
+  redis-data:
+    name: cf-redis-data-local
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cf-postgres-local
+    restart: unless-stopped
+    networks:
+      - cf-net
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-content_factory}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "55432:5432"   # 暴露到宿主机方便调试
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-content_factory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: cf-redis-local
+    restart: unless-stopped
+    networks:
+      - cf-net
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD}
+      - --maxmemory
+      - 200mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "56379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: cf-n8n-local
+    restart: unless-stopped
+    networks:
+      - cf-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # ---- 本地协议 ----
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_EDITOR_BASE_URL: http://localhost:5678
+      WEBHOOK_URL: http://localhost:5678/
+      # 本地不走代理
+      N8N_PROXY_HOPS: 0
+      # ---- 时区 ----
+      GENERIC_TIMEZONE: ${TZ:-Asia/Shanghai}
+      TZ: ${TZ:-Asia/Shanghai}
+      # ---- 加密密钥（丢了 credentials 全失效）----
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      # ---- 任务库 ----
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB:-content_factory}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      # ---- 执行模式：regular（单容器跑，演示够用；queue 模式还要起 worker 容器）----
+      EXECUTIONS_MODE: regular
+      # ---- 用户管理 ----
+      N8N_USER_MANAGEMENT_DISABLED: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      # ---- 日志 ----
+      N8N_LOG_LEVEL: info
+      # ---- 本地演示：API key 可留空，不影响 N8N 启动 ----
+      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:-https://5dock.com/v1}
+      NEWAPI_KEY: ${NEWAPI_KEY:-}
+      ARK_API_KEY: ${ARK_API_KEY:-}
+      ARK_ENDPOINT: ${ARK_ENDPOINT:-https://ark.cn-beijing.volces.com/api/v3}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_BITABLE_TOKEN: ${FEISHU_BITABLE_TOKEN:-}
+    ports:
+      - "5678:5678"   # 直接暴露到宿主机
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ../n8n:/workflows:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s

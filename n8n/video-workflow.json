@@ -1,0 +1,791 @@
+{
+  "name": "Content Factory - Video Pipeline (YN-BRA-001)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000001",
+      "name": "Webhook - /trigger/video",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger/video",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "a1f3c4e0-1111-4a01-9d11-000000000001"
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000002",
+      "name": "Respond 202 Accepted",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [480, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 202,
+        "responseBody": "={{ { accepted: true, task_id: $json.body.task_id, run_id: $execution.id } }}"
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000003",
+      "name": "Postgres - Read product + style + image_pool",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [720, 300],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "Postgres - content_factory"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT p.id AS product_id, p.sku, p.name, p.selling_points, p.target_audience AS audience, p.use_scenarios AS scenes, s.id AS style_id, jsonb_build_object('brand_colors', s.brand_colors, 'model_features', s.model_features, 'tone', s.tone, 'mood_keywords', s.mood_keywords, 'forbidden_words', s.forbidden_words, 'lighting', s.extra->>'lighting', 'composition', s.extra->>'composition', 'lens', s.extra->>'lens') AS style_json, COALESCE((SELECT json_agg(c.* ORDER BY c.created_at DESC) FROM candidates c JOIN tasks t2 ON t2.id = c.task_id WHERE t2.product_id = p.id AND c.media_type = 'image' AND c.status = 'approved'), '[]'::json) AS image_pool FROM tasks t JOIN products p ON p.id = t.product_id LEFT JOIN style_templates s ON s.id = p.style_template_id WHERE t.id = $1::uuid LIMIT 1;",
+        "additionalFields": {
+          "queryParams": "={{ $('Webhook - /trigger/video').item.json.body.task_id }}"
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000004",
+      "name": "LLM - Storyboard (Claude 4.6)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-5dock-newapi",
+          "name": "5dock NewAPI - Claude"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://5dock.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.6,\n  \"max_tokens\": 4096,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    { \"role\": \"system\", \"content\": $vars.SYSTEM_PROMPT_STORYBOARD },\n    { \"role\": \"user\", \"content\": 'SKU: ' + $json.sku + '\\n名称: ' + $json.name + '\\n卖点: ' + JSON.stringify($json.selling_points) + '\\n场景: ' + JSON.stringify($json.scenes) + '\\n受众: ' + $json.audience + '\\n风格: ' + JSON.stringify($json.style_json) + '\\nimage_pool: ' + JSON.stringify($json.image_pool) }\n  ]\n}",
+        "options": {
+          "timeout": 60000,
+          "retry": { "maxTries": 2, "waitBetweenTries": 3000 }
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000005",
+      "name": "Parse Storyboard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const raw = $json.choices[0].message.content;\nlet sb;\ntry { sb = JSON.parse(raw); } catch (e) {\n  throw new Error('Storyboard JSON parse failed: ' + e.message);\n}\nif (!sb.scenes || sb.scenes.length !== 4) {\n  throw new Error('Storyboard must have exactly 4 scenes, got ' + (sb.scenes||[]).length);\n}\nconst total = sb.scenes.reduce((a,s)=>a+s.duration_sec,0);\nif (Math.abs(total - 12.0) > 0.3) throw new Error('total_duration_sec must be 12.0 ±0.3, got ' + total);\nconst pool = $('Postgres - Read product + style + image_pool').item.json.image_pool || [];\nconst refUrl = pool.length ? pool[0].cdn_url : null;\nreturn sb.scenes.map((scene, idx) => ({\n  json: {\n    task_id: $('Webhook - /trigger/video').item.json.body.task_id,\n    sku: sb.sku,\n    storyboard: sb,\n    scene_no: scene.scene_no,\n    scene_index: idx,\n    scene_json: scene,\n    reference_image_url: refUrl,\n    style_json: $('Postgres - Read product + style + image_pool').item.json.style_json\n  }\n}));"
+        }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000006",
+      "name": "Split In Batches - 4 scenes",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1440, 300],
+      "parameters": {
+        "batchSize": 1,
+        "options": { "reset": false }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000007",
+      "name": "LLM - Keyframe Prompt (Seedream)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1680, 220],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-5dock-newapi",
+          "name": "5dock NewAPI - Claude"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://5dock.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.4,\n  \"max_tokens\": 600,\n  \"messages\": [\n    { \"role\": \"system\", \"content\": $vars.SYSTEM_PROMPT_KEYFRAME },\n    { \"role\": \"user\",   \"content\": 'Convert this storyboard scene into one Seedream 4.0 prompt.\\n[Scene JSON]\\n' + JSON.stringify($json.scene_json) + '\\n[Style anchors]\\nstyle_id: sportwear_dynamic; warm-white key + cool fill; high contrast; slight film grain; 85mm hero lens; model identity: Asian female model, 27 years old, long ponytail, natural tan skin, athletic 168cm build, defined shoulders, soft confident expression; garment: black sports bra YN-BRA-001 with centered front metallic zipper and diamond-cut breathable mesh panels at back and underarms.\\n[reference image url]\\n' + ($json.reference_image_url || '') }\n  ]\n}",
+        "options": {
+          "timeout": 60000,
+          "retry": { "maxTries": 2, "waitBetweenTries": 3000 }
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000008",
+      "name": "Seedream - Generate First Frame",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, 220],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-volcengine-ark",
+          "name": "Volc Ark - API Key"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"doubao-seedream-4-0-250528\",\n  \"prompt\": $('LLM - Keyframe Prompt (Seedream)').item.json.choices[0].message.content,\n  \"size\": \"720x1280\",\n  \"guidance_scale\": 3,\n  \"watermark\": false,\n  \"response_format\": \"url\",\n  \"reference_images\": $('Split In Batches - 4 scenes').item.json.reference_image_url ? [ $('Split In Batches - 4 scenes').item.json.reference_image_url ] : []\n}",
+        "options": {
+          "timeout": 120000,
+          "retry": { "maxTries": 2, "waitBetweenTries": 5000 }
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000009",
+      "name": "Extract First Frame URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [2160, 220],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ff-url-01",
+              "name": "first_frame_url",
+              "type": "string",
+              "value": "={{ $json.data && $json.data[0] ? $json.data[0].url : ($json.url || '') }}"
+            },
+            {
+              "id": "ff-scene-no",
+              "name": "scene_no",
+              "type": "number",
+              "value": "={{ $('Split In Batches - 4 scenes').item.json.scene_no }}"
+            },
+            {
+              "id": "ff-scene-json",
+              "name": "scene_json",
+              "type": "object",
+              "value": "={{ $('Split In Batches - 4 scenes').item.json.scene_json }}"
+            },
+            {
+              "id": "ff-task-id",
+              "name": "task_id",
+              "type": "string",
+              "value": "={{ $('Split In Batches - 4 scenes').item.json.task_id }}"
+            },
+            {
+              "id": "ff-prev-last",
+              "name": "prev_last_frame_url",
+              "type": "string",
+              "value": "={{ $('Split In Batches - 4 scenes').context.prev_last_frame_url || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000000a",
+      "name": "LLM - Video Prompt (Seedance)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 220],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-5dock-newapi",
+          "name": "5dock NewAPI - Claude"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://5dock.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.5,\n  \"max_tokens\": 700,\n  \"messages\": [\n    { \"role\": \"system\", \"content\": $vars.SYSTEM_PROMPT_VIDEO },\n    { \"role\": \"user\",   \"content\": '为 Seedance 2.0 生成镜 ' + $json.scene_no + ' 的视频 prompt。\\n[Scene JSON]\\n' + JSON.stringify($json.scene_json) + '\\n[首帧 URL，已通过 image_url 字段在 API 层传入，不要写进 prompt]\\n' + $json.first_frame_url + ($json.scene_no > 1 ? '\\n[前一镜尾帧 URL，已通过 last_frame_image_url 在 API 层传入]\\n' + $json.prev_last_frame_url : '') }\n  ]\n}",
+        "options": {
+          "timeout": 60000,
+          "retry": { "maxTries": 2, "waitBetweenTries": 3000 }
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000000b",
+      "name": "Seedance - Submit Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2640, 220],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-volcengine-ark",
+          "name": "Volc Ark - API Key"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"doubao-seedance-1-0-pro-250528\",\n  \"content\": (function(){\n    const ff = $('Extract First Frame URL').item.json.first_frame_url;\n    const lf = $('Extract First Frame URL').item.json.prev_last_frame_url;\n    const sceneNo = $('Extract First Frame URL').item.json.scene_no;\n    const promptText = $json.choices[0].message.content;\n    const arr = [ { type: 'text', text: promptText } ];\n    if (ff) arr.push({ type: 'image_url', image_url: { url: ff }, role: 'first_frame' });\n    if (sceneNo > 1 && lf) arr.push({ type: 'image_url', image_url: { url: lf }, role: 'last_frame' });\n    return arr;\n  })()\n}",
+        "options": {
+          "timeout": 60000,
+          "retry": { "maxTries": 2, "waitBetweenTries": 5000 }
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000000c",
+      "name": "Wait 20s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2880, 220],
+      "parameters": {
+        "amount": 20,
+        "unit": "seconds"
+      },
+      "webhookId": "a1f3c4e0-1111-4a01-9d11-00000000000c"
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000000d",
+      "name": "Seedance - Poll Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3120, 220],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-volcengine-ark",
+          "name": "Volc Ark - API Key"
+        }
+      },
+      "parameters": {
+        "method": "GET",
+        "url": "=https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/{{ $('Seedance - Submit Task').item.json.id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000000e",
+      "name": "If - Seedance Done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3360, 220],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "cond-seedance-succeeded",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "succeeded",
+              "operator": { "type": "string", "operation": "equals", "name": "filter.operator.equals" }
+            },
+            {
+              "id": "cond-seedance-failed",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "failed",
+              "operator": { "type": "string", "operation": "equals", "name": "filter.operator.equals" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000000f",
+      "name": "Extract Video URL",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [3600, 140],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "vid-url",
+              "name": "video_url",
+              "type": "string",
+              "value": "={{ $json.content && $json.content[0] ? $json.content[0].video_url : ($json.video_url || '') }}"
+            },
+            {
+              "id": "vid-scene-no",
+              "name": "scene_no",
+              "type": "number",
+              "value": "={{ $('Extract First Frame URL').item.json.scene_no }}"
+            },
+            {
+              "id": "vid-task-id",
+              "name": "task_id",
+              "type": "string",
+              "value": "={{ $('Extract First Frame URL').item.json.task_id }}"
+            },
+            {
+              "id": "vid-first-frame",
+              "name": "first_frame_url",
+              "type": "string",
+              "value": "={{ $('Extract First Frame URL').item.json.first_frame_url }}"
+            },
+            {
+              "id": "vid-status",
+              "name": "scene_status",
+              "type": "string",
+              "value": "={{ $json.status }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000010",
+      "name": "Download Scene MP4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3840, 140],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.video_url }}",
+        "options": {
+          "response": { "response": { "responseFormat": "file", "outputPropertyName": "data" } },
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000011",
+      "name": "Save Scene to /tmp + Extract Last Frame",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [4080, 140],
+      "parameters": {
+        "command": "=mkdir -p /tmp/{{ $json.task_id }} && cat > /tmp/{{ $json.task_id }}/scene_{{ $json.scene_no }}.mp4 < /dev/stdin && ffmpeg -y -sseof -0.05 -i /tmp/{{ $json.task_id }}/scene_{{ $json.scene_no }}.mp4 -vframes 1 -q:v 2 /tmp/{{ $json.task_id }}/scene_{{ $json.scene_no }}_last.jpg && echo 'OK'"
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000012",
+      "name": "Upload Last Frame to OSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4320, 140],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-aliyun-oss-signer",
+          "name": "Aliyun OSS - content-factory"
+        }
+      },
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://content-factory.oss-cn-shanghai.aliyuncs.com/lastframes/{{ $json.task_id }}/scene_{{ $json.scene_no }}_last.jpg",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": { "timeout": 60000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000013",
+      "name": "Set prev_last_frame_url for next batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4560, 140],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const taskId = $json.task_id;\nconst sceneNo = $json.scene_no;\nconst lastUrl = `https://content-factory.oss-cn-shanghai.aliyuncs.com/lastframes/${taskId}/scene_${sceneNo}_last.jpg`;\n// Stash on the SplitInBatches context so next batch's keyframe / video step can read it.\nconst sib = $getWorkflowStaticData('node');\nsib.prev_last_frame_url = lastUrl;\nreturn [{ json: { ...$json, last_frame_url: lastUrl } }];"
+        }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000014",
+      "name": "Loop back to Split In Batches",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [4800, 140],
+      "parameters": {}
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000015",
+      "name": "Concat Audio + Submit ASR (Volc)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1680, 540],
+      "parameters": {
+        "command": "=cd /tmp/{{ $json.task_id }} && for i in 1 2 3 4; do ffmpeg -y -i scene_${i}.mp4 -vn -acodec pcm_s16le -ar 16000 -ac 1 scene_${i}.wav; done && ffmpeg -y -f concat -safe 0 -i <(for i in 1 2 3 4; do echo \"file '/tmp/{{ $json.task_id }}/scene_${i}.wav'\"; done) -c copy concat.wav && curl -s -X PUT -T concat.wav -H 'Authorization: OSS ${OSS_KEY}:${OSS_SECRET}' \"https://content-factory.oss-cn-shanghai.aliyuncs.com/audios/{{ $json.task_id }}/concat.wav\" && echo 'https://content-factory.oss-cn-shanghai.aliyuncs.com/audios/{{ $json.task_id }}/concat.wav'"
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000016",
+      "name": "Volc ASR - Submit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, 540],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-volcengine-asr",
+          "name": "Volc ASR"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://openspeech.bytedance.com/api/v1/auc/submit",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"app\": { \"appid\": $vars.cred-volcengine-asr_APPID, \"token\": $vars.cred-volcengine-asr_TOKEN, \"cluster\": \"volc_auc_common\" },\n  \"audio\": { \"url\": $json.stdout.trim(), \"format\": \"wav\" },\n  \"request\": { \"language\": \"zh-CN\", \"enable_punc\": true, \"enable_itn\": true }\n}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000017",
+      "name": "Wait 8s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2160, 540],
+      "parameters": { "amount": 8, "unit": "seconds" },
+      "webhookId": "a1f3c4e0-1111-4a01-9d11-000000000017"
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000018",
+      "name": "Volc ASR - Poll + Build SRT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 540],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-volcengine-asr",
+          "name": "Volc ASR"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://openspeech.bytedance.com/api/v1/auc/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"app\": { \"appid\": $vars.cred-volcengine-asr_APPID, \"token\": $vars.cred-volcengine-asr_TOKEN, \"cluster\": \"volc_auc_common\" },\n  \"request\": { \"id\": $json.id }\n}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-000000000019",
+      "name": "Build SRT (or fallback to storyboard)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2640, 540],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "function fmt(t){const ms=Math.round(t*1000);const h=Math.floor(ms/3600000);const m=Math.floor((ms%3600000)/60000);const s=Math.floor((ms%60000)/1000);const x=ms%1000;return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+','+String(x).padStart(3,'0');}\nconst utt = $json.result && $json.result.utterances;\nconst sb = $('Parse Storyboard').first().json.storyboard || {scenes:[]};\nlet srt = '';\nif (utt && utt.length) {\n  utt.forEach((u,i) => { srt += `${i+1}\\n${fmt(u.start_time/1000)} --> ${fmt(u.end_time/1000)}\\n${u.text}\\n\\n`; });\n} else {\n  // fallback: even time slots from storyboard subtitles\n  let cur = 0;\n  sb.scenes.forEach((s,i) => { const end = cur + s.duration_sec; srt += `${i+1}\\n${fmt(cur)} --> ${fmt(end)}\\n${s.subtitle}\\n\\n`; cur = end; });\n}\nrequire('fs').writeFileSync('/tmp/'+$json.task_id+'/sub.srt', srt);\nreturn [{ json: { task_id: $json.task_id, srt_path: '/tmp/'+$json.task_id+'/sub.srt' } }];"
+        }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000001a",
+      "name": "FFmpeg - Concat + Burn Subtitles",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2880, 540],
+      "parameters": {
+        "command": "=cd /tmp/{{ $json.task_id }} && (for i in 1 2 3 4; do echo \"file '/tmp/{{ $json.task_id }}/scene_${i}.mp4'\"; done) > list.txt && ffmpeg -y -f concat -safe 0 -i list.txt -c copy concat.mp4 && ffmpeg -y -i concat.mp4 -vf \"subtitles=sub.srt:force_style='FontName=Source Han Sans CN,FontSize=42,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=80'\" -c:v libx264 -crf 20 -preset medium -c:a aac -b:a 128k final.mp4 && ffmpeg -y -i final.mp4 -ss 1 -vframes 1 -q:v 2 thumb.jpg && echo OK"
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000001b",
+      "name": "OSS - Upload final.mp4",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3120, 540],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-aliyun-oss-signer",
+          "name": "Aliyun OSS - content-factory"
+        }
+      },
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/{{ $now.format('yyyyMM') }}/{{ $json.task_id }}/candidate_1.mp4",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "video/mp4" }
+          ]
+        },
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": { "timeout": 180000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000001c",
+      "name": "OSS - Upload thumb.jpg",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3360, 540],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-aliyun-oss-signer",
+          "name": "Aliyun OSS - content-factory"
+        }
+      },
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/{{ $now.format('yyyyMM') }}/{{ $json.task_id }}/candidate_1_thumb.jpg",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "image/jpeg" }
+          ]
+        },
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": { "timeout": 60000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000001d",
+      "name": "Postgres - INSERT video_candidates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [3600, 540],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "Postgres - content_factory"
+        }
+      },
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO candidates (task_id, media_type, oss_url, thumbnail_url, parameters_snapshot, status, sequence_no, created_at) VALUES ($1::uuid, 'video', $2, $3, $4::jsonb, 'pending_review', 1, NOW()) RETURNING id;",
+        "additionalFields": {
+          "queryParams": "={{ $json.task_id }},={{ 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1.mp4' }},={{ 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1_thumb.jpg' }},={{ JSON.stringify($('Parse Storyboard').first().json.storyboard) }}"
+        }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000001e",
+      "name": "Feishu - Bitable Append Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3840, 540],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-feishu-tenant-token",
+          "name": "Feishu - tenant_access_token"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "=https://open.feishu.cn/open-apis/bitable/v1/apps/{{ $vars.FEISHU_BITABLE_APP_TOKEN }}/tables/{{ $vars.FEISHU_BITABLE_TABLE_ID }}/records",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"fields\": {\n    \"task_id\": $json.task_id,\n    \"sku\": \"YN-BRA-001\",\n    \"candidate_no\": 1,\n    \"video_url\": 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1.mp4',\n    \"thumb_url\": 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1_thumb.jpg',\n    \"status\": \"pending_review\",\n    \"created_at\": $now.toISOString()\n  }\n}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "a1f3c4e0-1111-4a01-9d11-00000000001f",
+      "name": "Feishu - Notify Group",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4080, 540],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-feishu-tenant-token",
+          "name": "Feishu - tenant_access_token"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "=https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"receive_id\": $vars.FEISHU_REVIEW_CHAT_ID,\n  \"msg_type\": \"interactive\",\n  \"content\": JSON.stringify({\n    config: { wide_screen_mode: true },\n    header: { title: { tag: 'plain_text', content: 'YN-BRA-001 视频候选已生成 #1' }, template: 'turquoise' },\n    elements: [\n      { tag: 'div', text: { tag: 'lark_md', content: '**Task**: ' + $json.task_id + '\\n**SKU**: YN-BRA-001\\n**时长**: 12s\\n**镜头数**: 4\\n**状态**: 待审核' } },\n      { tag: 'action', actions: [\n        { tag: 'button', text: { tag: 'plain_text', content: '查看视频' }, url: 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1.mp4', type: 'primary' }\n      ] }\n    ]\n  })\n}",
+        "options": { "timeout": 30000 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook - /trigger/video": {
+      "main": [
+        [
+          { "node": "Respond 202 Accepted", "type": "main", "index": 0 },
+          { "node": "Postgres - Read product + style + image_pool", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres - Read product + style + image_pool": {
+      "main": [[{ "node": "LLM - Storyboard (Claude 4.6)", "type": "main", "index": 0 }]]
+    },
+    "LLM - Storyboard (Claude 4.6)": {
+      "main": [[{ "node": "Parse Storyboard", "type": "main", "index": 0 }]]
+    },
+    "Parse Storyboard": {
+      "main": [[{ "node": "Split In Batches - 4 scenes", "type": "main", "index": 0 }]]
+    },
+    "Split In Batches - 4 scenes": {
+      "main": [
+        [{ "node": "Concat Audio + Submit ASR (Volc)", "type": "main", "index": 0 }],
+        [{ "node": "LLM - Keyframe Prompt (Seedream)", "type": "main", "index": 0 }]
+      ]
+    },
+    "LLM - Keyframe Prompt (Seedream)": {
+      "main": [[{ "node": "Seedream - Generate First Frame", "type": "main", "index": 0 }]]
+    },
+    "Seedream - Generate First Frame": {
+      "main": [[{ "node": "Extract First Frame URL", "type": "main", "index": 0 }]]
+    },
+    "Extract First Frame URL": {
+      "main": [[{ "node": "LLM - Video Prompt (Seedance)", "type": "main", "index": 0 }]]
+    },
+    "LLM - Video Prompt (Seedance)": {
+      "main": [[{ "node": "Seedance - Submit Task", "type": "main", "index": 0 }]]
+    },
+    "Seedance - Submit Task": {
+      "main": [[{ "node": "Wait 20s", "type": "main", "index": 0 }]]
+    },
+    "Wait 20s": {
+      "main": [[{ "node": "Seedance - Poll Task", "type": "main", "index": 0 }]]
+    },
+    "Seedance - Poll Task": {
+      "main": [[{ "node": "If - Seedance Done?", "type": "main", "index": 0 }]]
+    },
+    "If - Seedance Done?": {
+      "main": [
+        [{ "node": "Extract Video URL", "type": "main", "index": 0 }],
+        [{ "node": "Wait 20s", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Video URL": {
+      "main": [[{ "node": "Download Scene MP4", "type": "main", "index": 0 }]]
+    },
+    "Download Scene MP4": {
+      "main": [[{ "node": "Save Scene to /tmp + Extract Last Frame", "type": "main", "index": 0 }]]
+    },
+    "Save Scene to /tmp + Extract Last Frame": {
+      "main": [[{ "node": "Upload Last Frame to OSS", "type": "main", "index": 0 }]]
+    },
+    "Upload Last Frame to OSS": {
+      "main": [[{ "node": "Set prev_last_frame_url for next batch", "type": "main", "index": 0 }]]
+    },
+    "Set prev_last_frame_url for next batch": {
+      "main": [[{ "node": "Loop back to Split In Batches", "type": "main", "index": 0 }]]
+    },
+    "Loop back to Split In Batches": {
+      "main": [[{ "node": "Split In Batches - 4 scenes", "type": "main", "index": 0 }]]
+    },
+    "Concat Audio + Submit ASR (Volc)": {
+      "main": [[{ "node": "Volc ASR - Submit", "type": "main", "index": 0 }]]
+    },
+    "Volc ASR - Submit": {
+      "main": [[{ "node": "Wait 8s", "type": "main", "index": 0 }]]
+    },
+    "Wait 8s": {
+      "main": [[{ "node": "Volc ASR - Poll + Build SRT", "type": "main", "index": 0 }]]
+    },
+    "Volc ASR - Poll + Build SRT": {
+      "main": [[{ "node": "Build SRT (or fallback to storyboard)", "type": "main", "index": 0 }]]
+    },
+    "Build SRT (or fallback to storyboard)": {
+      "main": [[{ "node": "FFmpeg - Concat + Burn Subtitles", "type": "main", "index": 0 }]]
+    },
+    "FFmpeg - Concat + Burn Subtitles": {
+      "main": [[{ "node": "OSS - Upload final.mp4", "type": "main", "index": 0 }]]
+    },
+    "OSS - Upload final.mp4": {
+      "main": [[{ "node": "OSS - Upload thumb.jpg", "type": "main", "index": 0 }]]
+    },
+    "OSS - Upload thumb.jpg": {
+      "main": [[{ "node": "Postgres - INSERT video_candidates", "type": "main", "index": 0 }]]
+    },
+    "Postgres - INSERT video_candidates": {
+      "main": [[{ "node": "Feishu - Bitable Append Record", "type": "main", "index": 0 }]]
+    },
+    "Feishu - Bitable Append Record": {
+      "main": [[{ "node": "Feishu - Notify Group", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "executionTimeout": 1800
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "content-factory" },
+    { "name": "video" },
+    { "name": "seedance" }
+  ],
+  "pinData": {},
+  "versionId": "v1.0.0-yn-bra-001",
+  "meta": {
+    "instanceId": "content-factory-prod"
+  }
+}

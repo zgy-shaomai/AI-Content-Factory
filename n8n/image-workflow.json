@@ -1,0 +1,561 @@
+{
+  "name": "ContentFactory · Image Pipeline (YN-BRA-001 baseline)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "trigger/image",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a1f2c3d4-1101-4001-8101-111111111101",
+      "name": "Webhook · /trigger/image",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [-1600, 0],
+      "webhookId": "cf-image-trigger-yfn-001"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.id AS task_id, t.product_id, p.style_template_id, t.status AS task_status, p.sku, p.name AS name_cn, (p.spec->>'name_en') AS name_en, p.spec AS attributes_json, (p.spec->>'canonical_model_ref') AS canonical_model_ref, p.selling_points AS raw_selling_points, p.reference_image_urls AS reference_image_ids, st.brand_colors AS brand_palette, st.model_features AS model_descriptor, (st.extra->>'lighting') AS lighting, (st.extra->>'composition') AS composition, (st.extra->>'lens') AS lens, array_to_string(st.mood_keywords, ', ') AS mood, COALESCE(st.extra->>'negative_prompt', array_to_string(st.forbidden_words, ', ')) AS style_negative_prompt FROM tasks t JOIN products p ON p.id = t.product_id JOIN style_templates st ON st.id = p.style_template_id WHERE t.id = $1::uuid LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [$json.body.task_id] }}"
+        }
+      },
+      "id": "a1f2c3d4-1102-4002-8102-111111111102",
+      "name": "Postgres · Load product+style",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-1380, 0],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "PG · content_factory"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO generation_runs (id, task_id, sequence_no, model_provider, model_name, purpose, status, started_at, input_payload) VALUES (gen_random_uuid(), $1::uuid, COALESCE((SELECT MAX(sequence_no)+1 FROM generation_runs WHERE task_id = $1::uuid), 1), 'volcengine_ark', 'doubao-seedream-4-0-250828', 'image_product', 'running', now(), ($3::jsonb) || jsonb_build_object('product_id', $2)) RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [$json.task_id, $json.product_id, JSON.stringify({ trigger: 'webhook', shot_set: 'full' })] }}",
+          "queryParams": "={{$json.task_id}},{{$json.product_id}},{{ JSON.stringify({ trigger: 'webhook', shot_set: $('Webhook · /trigger/image').item.json.body.shot_set || 'full' }) }}"
+        }
+      },
+      "id": "a1f2c3d4-1103-4003-8103-111111111103",
+      "name": "Postgres · Insert generation_run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [-1160, 0],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "PG · content_factory"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://5dock.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.4,\n  \"max_tokens\": 2500,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    { \"role\": \"system\", \"content\": \"You are a senior creative director for an apparel e-commerce content factory. Distill product attributes and Chinese marketing copy into 5-7 ranked selling points, each with rank, text_cn (≤18 chars), text_en, visual_hint, category. Output strict JSON only.\" },\n    { \"role\": \"user\", \"content\": \"=== ATTRIBUTES ===\\n{{ JSON.stringify($('Postgres · Load product+style').item.json.attributes_json) }}\\n\\n=== ORIGINAL CN COPY ===\\n{{ $('Postgres · Load product+style').item.json.raw_selling_points }}\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: {{ $('Postgres · Load product+style').item.json.brand_palette }}\\nmood: {{ $('Postgres · Load product+style').item.json.mood }}\\n\\nReturn { \\\"selling_points\\\": [...] }.\" }\n  ]\n}",
+        "options": {
+          "timeout": 60000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "a1f2c3d4-1104-4004-8104-111111111104",
+      "name": "LLM · Selling points (5dock)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-940, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-5dock-newapi",
+          "name": "5dock NewAPI · Authorization"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://5dock.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.6,\n  \"max_tokens\": 6000,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    { \"role\": \"system\", \"content\": \"You are a senior prompt engineer for Seedream 4.0. Generate 6 product-shot prompts (studio_front, studio_side, studio_back, fabric_macro, zipper_action, logo_closeup) AND 5 scene prompts (scene_yoga_studio, scene_gym_training, scene_running_park, scene_outdoor_mountain, scene_beach). Each en_prompt 80-150 words English, dense with subject, garment details, lighting, composition, lens, style keywords, and reference image tags [reference: id, weight: 0.x]. Inject brand_palette and model_descriptor verbatim. Always preserve original tonal logo on left chest 6cm below collarbone 3cm wide. Color discipline: matte black neutral undertone no navy or warm shift. Output JSON: { shared_negative_prompt, prompts: [11 items each with shot_id, shot_type, en_prompt, suggested_size, ref_image_ids, guidance_scale, seed_hint] }.\" },\n    { \"role\": \"user\", \"content\": \"=== ATTRIBUTES ===\\n{{ JSON.stringify($('Postgres · Load product+style').item.json.attributes_json) }}\\n\\n=== SELLING POINTS ===\\n{{ $json.choices[0].message.content }}\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: {{ $('Postgres · Load product+style').item.json.brand_palette }}\\nmodel_descriptor: {{ $('Postgres · Load product+style').item.json.model_descriptor }}\\nlighting: {{ $('Postgres · Load product+style').item.json.lighting }}\\ncomposition: {{ $('Postgres · Load product+style').item.json.composition }}\\nlens: {{ $('Postgres · Load product+style').item.json.lens }}\\nmood: {{ $('Postgres · Load product+style').item.json.mood }}\\n\\n=== REFERENCE IMAGES AVAILABLE ===\\nmodel_ref_001 (canonical), product_ref_001 (flat-lay), product_ref_002 (back mesh detail), scene_ref_yoga_001, scene_ref_gym_001\\n\\nReturn JSON: { shared_negative_prompt, prompts: [...11 items...] }\" }\n  ]\n}",
+        "options": {
+          "timeout": 90000,
+          "response": { "response": { "responseFormat": "json" } }
+        }
+      },
+      "id": "a1f2c3d4-1105-4005-8105-111111111105",
+      "name": "LLM · Build 11 prompts (5dock)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-720, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-5dock-newapi",
+          "name": "5dock NewAPI · Authorization"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the LLM JSON content and explode into 11 items, one per shot prompt.\nconst raw = $input.first().json.choices[0].message.content;\nlet parsed;\ntry {\n  parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;\n} catch (e) {\n  throw new Error('LLM did not return valid JSON: ' + e.message);\n}\nif (!parsed.prompts || !Array.isArray(parsed.prompts) || parsed.prompts.length < 11) {\n  throw new Error('Expected 11 prompts in LLM response, got ' + (parsed.prompts ? parsed.prompts.length : 0));\n}\nconst sharedNeg = parsed.shared_negative_prompt || '';\nconst runId = $('Postgres · Insert generation_run').item.json.id;\nconst sku = $('Postgres · Load product+style').item.json.sku;\nconst productId = $('Postgres · Load product+style').item.json.product_id;\nconst taskId = $('Postgres · Load product+style').item.json.task_id;\n\nreturn parsed.prompts.map((p, idx) => ({\n  json: {\n    run_id: runId,\n    task_id: taskId,\n    product_id: productId,\n    sku: sku,\n    shot_id: p.shot_id,\n    shot_type: p.shot_type,\n    en_prompt: p.en_prompt,\n    negative_prompt: sharedNeg,\n    suggested_size: p.suggested_size || '2048x2048',\n    ref_image_ids: p.ref_image_ids || [],\n    guidance_scale: p.guidance_scale || 5.5,\n    seed: p.seed_hint || (Math.floor(Math.random() * 2_000_000_000)),\n    idx: idx,\n    ref_image_urls: (p.ref_image_ids || []).map(id => {\n      if (id.startsWith('scene_ref_')) {\n        return `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/refs/scenes/${id}.jpg`;\n      }\n      return `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/refs/${sku}/${id}.jpg`;\n    })\n  }\n}));"
+      },
+      "id": "a1f2c3d4-1106-4006-8106-111111111106",
+      "name": "Code · Explode prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-500, -120]
+    },
+    {
+      "parameters": {
+        "batchSize": 4,
+        "options": {}
+      },
+      "id": "a1f2c3d4-1107-4007-8107-111111111107",
+      "name": "Split In Batches · 4 concurrent",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [-280, -120]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"doubao-seedream-4-0-250828\",\n  \"prompt\": {{ JSON.stringify($json.en_prompt) }},\n  \"image\": {{ JSON.stringify($json.ref_image_urls) }},\n  \"size\": {{ JSON.stringify($json.suggested_size) }},\n  \"seed\": {{ $json.seed }},\n  \"guidance_scale\": {{ $json.guidance_scale }},\n  \"watermark\": false,\n  \"response_format\": \"url\",\n  \"negative_prompt\": {{ JSON.stringify($json.negative_prompt) }}\n}",
+        "options": {
+          "timeout": 90000,
+          "response": { "response": { "responseFormat": "json" } },
+          "retry": {
+            "limit": 3,
+            "waitBetweenTries": 6000
+          }
+        }
+      },
+      "id": "a1f2c3d4-1108-4008-8108-111111111108",
+      "name": "Seedream · Generate image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-60, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-volcengine-ark",
+          "name": "Volcengine Ark · Bearer"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 6000
+    },
+    {
+      "parameters": {
+        "amount": 6,
+        "unit": "seconds"
+      },
+      "id": "a1f2c3d4-1109-4009-8109-111111111109",
+      "name": "Wait · slot before next batch",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [160, -240]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.data[0].url}}",
+        "options": {
+          "timeout": 60000,
+          "response": { "response": { "responseFormat": "file" } }
+        }
+      },
+      "id": "a1f2c3d4-1110-4010-8110-111111111110",
+      "name": "HTTP · Download generated image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [160, -120]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compute OSS keys and merge upstream metadata into a single payload for the next nodes.\nconst incoming = $input.first().json;\nconst binary = $input.first().binary;\nconst meta = $('Code · Explode prompts').item.json;\nconst sku = meta.sku;\nconst runId = meta.run_id;\nconst shotId = meta.shot_id;\nconst idx = meta.idx;\nconst ossKey = `archive/${sku}/${runId}/${shotId}_${String(idx).padStart(2,'0')}.png`;\nconst ossThumbKey = `archive/${sku}/${runId}/thumb_${shotId}_${String(idx).padStart(2,'0')}.jpg`;\nconst arkRequestId = incoming.id || incoming.request_id || '';\nconst arkUrl = (incoming.data && incoming.data[0] && incoming.data[0].url) || '';\n\nreturn [{\n  json: {\n    ...meta,\n    ark_request_id: arkRequestId,\n    ark_image_url: arkUrl,\n    oss_key: ossKey,\n    oss_thumb_key: ossThumbKey,\n    oss_bucket: 'yfn-content-factory',\n    oss_endpoint: 'oss-cn-shanghai.aliyuncs.com',\n    oss_url: `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/${ossKey}`,\n    oss_thumb_url: `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/${ossThumbKey}`,\n    generation_cost_cny: 0.30,\n    image_bytes: binary && binary.data ? binary.data.fileSize || 0 : 0\n  },\n  binary: binary\n}];"
+      },
+      "id": "a1f2c3d4-1111-4011-8111-111111111111",
+      "name": "Code · Compute OSS key + metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [380, -120]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/{{ $json.oss_key }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "image/png" },
+            { "name": "x-oss-meta-prompt-hash", "value": "={{$json.shot_id}}-{{$json.seed}}" },
+            { "name": "x-oss-meta-seed", "value": "={{$json.seed}}" },
+            { "name": "x-oss-meta-model", "value": "doubao-seedream-4-0-250828" },
+            { "name": "x-oss-meta-run-id", "value": "={{$json.run_id}}" },
+            { "name": "x-oss-meta-sku", "value": "={{$json.sku}}" }
+          ]
+        },
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "a1f2c3d4-1112-4012-8112-111111111112",
+      "name": "OSS · Upload PNG",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-aliyun-oss-signer",
+          "name": "Aliyun OSS · Signed Header"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 4000
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO candidates (id, task_id, run_id, media_type, oss_url, thumbnail_url, prompt_snapshot, parameters_snapshot, status, sequence_no, created_at) SELECT gen_random_uuid(), gr.task_id, $1::uuid, 'image', $13, $14, $5, jsonb_build_object('product_id', $2, 'shot_id', $3, 'shot_type', $4, 'negative_prompt', $6, 'model_name', 'doubao-seedream-4-0-250828', 'model_provider', 'volcengine_ark', 'seed', $7, 'ref_image_ids', $8::jsonb, 'guidance_scale', $9, 'image_size', $10, 'oss_key', $11, 'oss_thumb_key', $12, 'ark_request_id', $15, 'generation_cost_cny', $16) || ($17::jsonb), 'pending_review', COALESCE((SELECT MAX(sequence_no)+1 FROM candidates WHERE task_id = gr.task_id), 1), now() FROM generation_runs gr WHERE gr.id = $1::uuid RETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [$json.run_id, $json.product_id, $json.shot_id, $json.shot_type, $json.en_prompt, $json.negative_prompt, $json.seed, JSON.stringify($json.ref_image_ids), $json.guidance_scale, $json.suggested_size, $json.oss_key, $json.oss_thumb_key, $json.oss_url, $json.oss_thumb_url, $json.ark_request_id, $json.generation_cost_cny, JSON.stringify({ logo_preserved: true, fabric_keywords: ['breathable mesh','sweat-wicking nylon-spandex'], brand_palette_hash: 'sha1:matteblack-v1', image_bytes: $json.image_bytes })] }}",
+          "queryParams": "={{$json.run_id}},{{$json.product_id}},{{$json.shot_id}},{{$json.shot_type}},{{$json.en_prompt}},{{$json.negative_prompt}},{{$json.seed}},{{ JSON.stringify($json.ref_image_ids) }},{{$json.guidance_scale}},{{$json.suggested_size}},{{$json.oss_key}},{{$json.oss_thumb_key}},{{$json.oss_url}},{{$json.oss_thumb_url}},{{$json.ark_request_id}},{{$json.generation_cost_cny}},{{ JSON.stringify({ logo_preserved: true, fabric_keywords: ['breathable mesh','sweat-wicking nylon-spandex'], brand_palette_hash: 'sha1:matteblack-v1', image_bytes: $json.image_bytes }) }}"
+        }
+      },
+      "id": "a1f2c3d4-1113-4013-8113-111111111113",
+      "name": "Postgres · Insert candidate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [820, -120],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "PG · content_factory"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.feishu.cn/open-apis/bitable/v1/apps/{{ $env.FEISHU_BITABLE_APP_ID }}/tables/{{ $env.FEISHU_BITABLE_REVIEW_TABLE_ID }}/records",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"fields\": {\n    \"SKU\": {{ JSON.stringify($json.sku) }},\n    \"镜头\": {{ JSON.stringify($json.shot_id) }},\n    \"类型\": {{ JSON.stringify($json.shot_type) }},\n    \"封面URL\": {{ JSON.stringify($json.oss_thumb_url) }},\n    \"原图URL\": {{ JSON.stringify($json.oss_url) }},\n    \"Prompt\": {{ JSON.stringify($json.en_prompt) }},\n    \"Seed\": {{ $json.seed }},\n    \"审核状态\": \"待审核\",\n    \"run_id\": {{ JSON.stringify($json.run_id) }},\n    \"candidate_id\": {{ JSON.stringify($('Postgres · Insert candidate').item.json.id) }},\n    \"生成时间\": \"{{ $now.toISO() }}\"\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a1f2c3d4-1114-4014-8114-111111111114",
+      "name": "Feishu · Bitable add review row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, -120],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "cred-feishu-tenant-token",
+          "name": "Feishu · tenant_access_token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FEISHU_REVIEW_NOTIFY_WEBHOOK }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"msg_type\": \"text\",\n  \"content\": {\n    \"text\": \"<at user_id=\\\"all\\\">审核员</at> SKU {{$json.sku}} 镜头 {{$json.shot_id}} 候选已就绪，请前往多维表审核。run_id: {{$json.run_id}}\"\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a1f2c3d4-1115-4015-8115-111111111115",
+      "name": "Feishu · Notify reviewer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1260, -120]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE generation_runs SET status = 'failed', error_message = ($2::text || ': ' || $3::text), finished_at = now() WHERE id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$('Postgres бд Insert generation_run').item.json.id, 'upstream_failure', JSON.stringify($json.error || $json)] }}",
+          "queryParams": "={{ $('Postgres · Insert generation_run').item.json.id }},upstream_failure,{{ JSON.stringify($json.error || $json) }}"
+        }
+      },
+      "id": "a1f2c3d4-1116-4016-8116-111111111116",
+      "name": "Postgres · Mark run failed",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [380, 240],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "PG · content_factory"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FEISHU_ALERT_WEBHOOK }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"msg_type\": \"text\",\n  \"content\": {\n    \"text\": \"[ALERT] image-pipeline run failed. run_id={{ $('Postgres · Insert generation_run').item.json.id }} step={{$json.step || 'unknown'}} error={{ JSON.stringify($json.error || $json).slice(0,500) }}\"\n  }\n}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a1f2c3d4-1117-4017-8117-111111111117",
+      "name": "Feishu · Alert error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [600, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE generation_runs SET status = CASE WHEN (SELECT COUNT(*) FROM candidates WHERE run_id = $1::uuid AND status != 'failed') >= 11 THEN 'succeeded' WHEN (SELECT COUNT(*) FROM candidates WHERE run_id = $1::uuid AND status != 'failed') > 0 THEN 'partial' ELSE 'failed' END, finished_at = now() WHERE id = $1::uuid RETURNING status;",
+        "options": {
+          "queryReplacement": "={{ [$('Postgres бд Insert generation_run').item.json.id] }}",
+          "queryParams": "={{ $('Postgres · Insert generation_run').item.json.id }}"
+        }
+      },
+      "id": "a1f2c3d4-1118-4018-8118-111111111118",
+      "name": "Postgres · Finalize run status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1480, -120],
+      "credentials": {
+        "postgres": {
+          "id": "cred-pg-content-factory",
+          "name": "PG · content_factory"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true, \"run_id\": \"{{ $('Postgres · Insert generation_run').item.json.id }}\", \"task_id\": \"{{ $('Postgres · Load product+style').item.json.task_id }}\", \"sku\": \"{{ $('Postgres · Load product+style').item.json.sku }}\", \"final_status\": \"{{ $json.status }}\" }"
+      },
+      "id": "a1f2c3d4-1119-4019-8119-111111111119",
+      "name": "Respond · final summary",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1700, -120]
+    }
+  ],
+  "connections": {
+    "Webhook · /trigger/image": {
+      "main": [
+        [
+          { "node": "Postgres · Load product+style", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres · Load product+style": {
+      "main": [
+        [
+          { "node": "Postgres · Insert generation_run", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres · Insert generation_run": {
+      "main": [
+        [
+          { "node": "LLM · Selling points (5dock)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "LLM · Selling points (5dock)": {
+      "main": [
+        [
+          { "node": "LLM · Build 11 prompts (5dock)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "LLM · Build 11 prompts (5dock)": {
+      "main": [
+        [
+          { "node": "Code · Explode prompts", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Code · Explode prompts": {
+      "main": [
+        [
+          { "node": "Split In Batches · 4 concurrent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Split In Batches · 4 concurrent": {
+      "main": [
+        [
+          { "node": "Seedream · Generate image", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Postgres · Finalize run status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Seedream · Generate image": {
+      "main": [
+        [
+          { "node": "HTTP · Download generated image", "type": "main", "index": 0 }
+        ]
+      ],
+      "error": [
+        [
+          { "node": "Postgres · Mark run failed", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "HTTP · Download generated image": {
+      "main": [
+        [
+          { "node": "Code · Compute OSS key + metadata", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Code · Compute OSS key + metadata": {
+      "main": [
+        [
+          { "node": "OSS · Upload PNG", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "OSS · Upload PNG": {
+      "main": [
+        [
+          { "node": "Postgres · Insert candidate", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres · Insert candidate": {
+      "main": [
+        [
+          { "node": "Feishu · Bitable add review row", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Feishu · Bitable add review row": {
+      "main": [
+        [
+          { "node": "Feishu · Notify reviewer", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Feishu · Notify reviewer": {
+      "main": [
+        [
+          { "node": "Wait · slot before next batch", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait · slot before next batch": {
+      "main": [
+        [
+          { "node": "Split In Batches · 4 concurrent", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres · Mark run failed": {
+      "main": [
+        [
+          { "node": "Feishu · Alert error", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Postgres · Finalize run status": {
+      "main": [
+        [
+          { "node": "Respond · final summary", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "timezone": "Asia/Shanghai",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "content-factory" },
+    { "name": "image-pipeline" },
+    { "name": "yfn" }
+  ],
+  "triggerCount": 1,
+  "versionId": "v1.0.0-2026-05-05",
+  "meta": {
+    "instanceId": "yfn-content-factory-prod"
+  },
+  "pinData": {}
+}

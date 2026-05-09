@@ -1,0 +1,80 @@
+# =============================================================================
+# Caddy 反向代理配置
+# 自动 HTTPS（Let's Encrypt），两个 vhost：N8N 控制台 + API webhook
+# =============================================================================
+
+{
+	email {$ACME_EMAIL}
+	# 生产用 Let's Encrypt；测试时可换 acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+# 健康检查（容器内部用，不走 HTTPS）
+:80 {
+	@health path /health
+	respond @health "ok" 200
+}
+
+# N8N 控制台
+{$N8N_HOST} {
+	encode zstd gzip
+
+	# 安全响应头
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	reverse_proxy n8n:5678 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		header_up Host {host}
+	}
+
+	log {
+		output file /data/access-n8n.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+		format json
+	}
+}
+
+# API webhook 入口（同样指向 N8N 的 webhook 端点）
+# 把 webhook 与控制台分到不同 host，便于将来给 webhook 单独加 IP 白名单
+{$API_HOST} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# 只允许 webhook 路径，其余返回 404
+	@webhook path /webhook/* /webhook-test/*
+	handle @webhook {
+		reverse_proxy n8n:5678 {
+			header_up X-Forwarded-Proto {scheme}
+			header_up X-Forwarded-For {remote_host}
+			header_up Host {host}
+		}
+	}
+
+	handle {
+		respond "Not Found" 404
+	}
+
+	log {
+		output file /data/access-api.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+		format json
+	}
+}
