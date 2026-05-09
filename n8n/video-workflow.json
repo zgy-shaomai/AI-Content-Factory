@@ -43,8 +43,8 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "SELECT p.id AS product_id, p.sku, p.name, p.selling_points, p.target_audience AS audience, p.use_scenarios AS scenes, s.id AS style_id, jsonb_build_object('brand_colors', s.brand_colors, 'model_features', s.model_features, 'tone', s.tone, 'mood_keywords', s.mood_keywords, 'forbidden_words', s.forbidden_words, 'lighting', s.extra->>'lighting', 'composition', s.extra->>'composition', 'lens', s.extra->>'lens') AS style_json, COALESCE((SELECT json_agg(c.* ORDER BY c.created_at DESC) FROM candidates c JOIN tasks t2 ON t2.id = c.task_id WHERE t2.product_id = p.id AND c.media_type = 'image' AND c.status = 'approved'), '[]'::json) AS image_pool FROM tasks t JOIN products p ON p.id = t.product_id LEFT JOIN style_templates s ON s.id = p.style_template_id WHERE t.id = $1::uuid LIMIT 1;",
-        "additionalFields": {
-          "queryParams": "={{ $('Webhook - /trigger/video').item.json.body.task_id }}"
+        "options": {
+          "queryReplacement": "={{ [$('Webhook - /trigger/video').item.json.body.task_id] }}"
         }
       }
     },
@@ -159,7 +159,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"doubao-seedream-4-0-250528\",\n  \"prompt\": $('LLM - Keyframe Prompt (Seedream)').item.json.choices[0].message.content,\n  \"size\": \"720x1280\",\n  \"guidance_scale\": 3,\n  \"watermark\": false,\n  \"response_format\": \"url\",\n  \"reference_images\": $('Split In Batches - 4 scenes').item.json.reference_image_url ? [ $('Split In Batches - 4 scenes').item.json.reference_image_url ] : []\n}",
+        "jsonBody": "={\n  \"model\": \"doubao-seedream-4-0-250828\",\n  \"prompt\": $('LLM - Keyframe Prompt (Seedream)').item.json.choices[0].message.content,\n  \"size\": \"720x1280\",\n  \"guidance_scale\": 3,\n  \"watermark\": false,\n  \"response_format\": \"url\",\n  \"reference_images\": $('Split In Batches - 4 scenes').item.json.reference_image_url ? [ $('Split In Batches - 4 scenes').item.json.reference_image_url ] : []\n}",
         "options": {
           "timeout": 120000,
           "retry": { "maxTries": 2, "waitBetweenTries": 5000 }
@@ -394,13 +394,15 @@
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-000000000011",
-      "name": "Save Scene to /tmp + Extract Last Frame",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "name": "Mock · Save Scene + Extract Last Frame",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [4080, 140],
       "parameters": {
-        "command": "=mkdir -p /tmp/{{ $json.task_id }} && cat > /tmp/{{ $json.task_id }}/scene_{{ $json.scene_no }}.mp4 < /dev/stdin && ffmpeg -y -sseof -0.05 -i /tmp/{{ $json.task_id }}/scene_{{ $json.scene_no }}.mp4 -vframes 1 -q:v 2 /tmp/{{ $json.task_id }}/scene_{{ $json.scene_no }}_last.jpg && echo 'OK'"
-      }
+        "language": "javaScript",
+        "jsCode": "// Phase 0 import-safe mock. Real FFmpeg work should run in a worker service, not executeCommand.\nreturn $input.all();"
+      },
+      "disabled": true
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-000000000012",
@@ -445,13 +447,15 @@
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-000000000015",
-      "name": "Concat Audio + Submit ASR (Volc)",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "name": "Mock · Concat Audio + Submit ASR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [1680, 540],
       "parameters": {
-        "command": "=cd /tmp/{{ $json.task_id }} && for i in 1 2 3 4; do ffmpeg -y -i scene_${i}.mp4 -vn -acodec pcm_s16le -ar 16000 -ac 1 scene_${i}.wav; done && ffmpeg -y -f concat -safe 0 -i <(for i in 1 2 3 4; do echo \"file '/tmp/{{ $json.task_id }}/scene_${i}.wav'\"; done) -c copy concat.wav && curl -s -X PUT -T concat.wav -H 'Authorization: OSS ${OSS_KEY}:${OSS_SECRET}' \"https://content-factory.oss-cn-shanghai.aliyuncs.com/audios/{{ $json.task_id }}/concat.wav\" && echo 'https://content-factory.oss-cn-shanghai.aliyuncs.com/audios/{{ $json.task_id }}/concat.wav'"
-      }
+        "language": "javaScript",
+        "jsCode": "// Phase 0 import-safe mock. Real ASR input generation should be moved to a worker service.\nreturn $input.all();"
+      },
+      "disabled": true
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-000000000016",
@@ -527,13 +531,15 @@
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-00000000001a",
-      "name": "FFmpeg - Concat + Burn Subtitles",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "name": "Mock · FFmpeg Concat + Burn Subtitles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [2880, 540],
       "parameters": {
-        "command": "=cd /tmp/{{ $json.task_id }} && (for i in 1 2 3 4; do echo \"file '/tmp/{{ $json.task_id }}/scene_${i}.mp4'\"; done) > list.txt && ffmpeg -y -f concat -safe 0 -i list.txt -c copy concat.mp4 && ffmpeg -y -i concat.mp4 -vf \"subtitles=sub.srt:force_style='FontName=Source Han Sans CN,FontSize=42,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Alignment=2,MarginV=80'\" -c:v libx264 -crf 20 -preset medium -c:a aac -b:a 128k final.mp4 && ffmpeg -y -i final.mp4 -ss 1 -vframes 1 -q:v 2 thumb.jpg && echo OK"
-      }
+        "language": "javaScript",
+        "jsCode": "// Phase 0 import-safe mock. Real final rendering is represented by pre-generated demo assets.\nreturn $input.all();"
+      },
+      "disabled": true
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-00000000001b",
@@ -593,7 +599,7 @@
     },
     {
       "id": "a1f3c4e0-1111-4a01-9d11-00000000001d",
-      "name": "Postgres - INSERT video_candidates",
+      "name": "Postgres - INSERT video candidate",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
       "position": [3600, 540],
@@ -606,8 +612,8 @@
       "parameters": {
         "operation": "executeQuery",
         "query": "INSERT INTO candidates (task_id, media_type, oss_url, thumbnail_url, parameters_snapshot, status, sequence_no, created_at) VALUES ($1::uuid, 'video', $2, $3, $4::jsonb, 'pending_review', 1, NOW()) RETURNING id;",
-        "additionalFields": {
-          "queryParams": "={{ $json.task_id }},={{ 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1.mp4' }},={{ 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1_thumb.jpg' }},={{ JSON.stringify($('Parse Storyboard').first().json.storyboard) }}"
+        "options": {
+          "queryReplacement": "={{ [$json.task_id, 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1.mp4', 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1_thumb.jpg', JSON.stringify($('Parse Storyboard').first().json.storyboard)] }}"
         }
       }
     },
@@ -690,7 +696,7 @@
     },
     "Split In Batches - 4 scenes": {
       "main": [
-        [{ "node": "Concat Audio + Submit ASR (Volc)", "type": "main", "index": 0 }],
+        [{ "node": "Mock · Concat Audio + Submit ASR", "type": "main", "index": 0 }],
         [{ "node": "LLM - Keyframe Prompt (Seedream)", "type": "main", "index": 0 }]
       ]
     },
@@ -725,9 +731,9 @@
       "main": [[{ "node": "Download Scene MP4", "type": "main", "index": 0 }]]
     },
     "Download Scene MP4": {
-      "main": [[{ "node": "Save Scene to /tmp + Extract Last Frame", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Mock · Save Scene + Extract Last Frame", "type": "main", "index": 0 }]]
     },
-    "Save Scene to /tmp + Extract Last Frame": {
+    "Mock · Save Scene + Extract Last Frame": {
       "main": [[{ "node": "Upload Last Frame to OSS", "type": "main", "index": 0 }]]
     },
     "Upload Last Frame to OSS": {
@@ -739,7 +745,7 @@
     "Loop back to Split In Batches": {
       "main": [[{ "node": "Split In Batches - 4 scenes", "type": "main", "index": 0 }]]
     },
-    "Concat Audio + Submit ASR (Volc)": {
+    "Mock · Concat Audio + Submit ASR": {
       "main": [[{ "node": "Volc ASR - Submit", "type": "main", "index": 0 }]]
     },
     "Volc ASR - Submit": {
@@ -752,18 +758,18 @@
       "main": [[{ "node": "Build SRT (or fallback to storyboard)", "type": "main", "index": 0 }]]
     },
     "Build SRT (or fallback to storyboard)": {
-      "main": [[{ "node": "FFmpeg - Concat + Burn Subtitles", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Mock · FFmpeg Concat + Burn Subtitles", "type": "main", "index": 0 }]]
     },
-    "FFmpeg - Concat + Burn Subtitles": {
+    "Mock · FFmpeg Concat + Burn Subtitles": {
       "main": [[{ "node": "OSS - Upload final.mp4", "type": "main", "index": 0 }]]
     },
     "OSS - Upload final.mp4": {
       "main": [[{ "node": "OSS - Upload thumb.jpg", "type": "main", "index": 0 }]]
     },
     "OSS - Upload thumb.jpg": {
-      "main": [[{ "node": "Postgres - INSERT video_candidates", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Postgres - INSERT video candidate", "type": "main", "index": 0 }]]
     },
-    "Postgres - INSERT video_candidates": {
+    "Postgres - INSERT video candidate": {
       "main": [[{ "node": "Feishu - Bitable Append Record", "type": "main", "index": 0 }]]
     },
     "Feishu - Bitable Append Record": {

@@ -16,6 +16,7 @@ CONTAINER_NAME="cf-smoke-pg-$$"
 PG_PASSWORD="smoke_test_$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+export CONTAINER_NAME ROOT_DIR
 
 cleanup() {
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -51,13 +52,10 @@ echo "▶ 抽 N8N workflow query 逐条 EXPLAIN..."
 python3 - <<'PYEOF'
 import json, subprocess, sys
 from pathlib import Path
-
-ROOT = Path("F:/飞飞这边的事情/01-内容工厂项目")
-CONTAINER = "$CONTAINER_NAME"
 import os
-container = os.environ.get("CONTAINER_NAME") or sys.argv[1] if len(sys.argv) > 1 else None
-if not container:
-    print("CONTAINER_NAME 未传"); sys.exit(2)
+
+ROOT = Path(os.environ["ROOT_DIR"])
+container = os.environ["CONTAINER_NAME"]
 
 queries = []
 for wf in ("image-workflow.json", "video-workflow.json"):

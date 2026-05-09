@@ -108,7 +108,7 @@ services:
   # N8N - 工作流编排（queue mode：main + worker 都在一个容器里跑，简化部署）
   # ---------------------------------------------------------------------------
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:${N8N_VERSION:-1.85.4}
     container_name: cf-n8n
     restart: unless-stopped
     networks:
@@ -124,7 +124,7 @@ services:
       N8N_PORT: 5678
       N8N_PROTOCOL: https
       N8N_EDITOR_BASE_URL: https://${N8N_HOST}
-      WEBHOOK_URL: https://${N8N_HOST}/
+      WEBHOOK_URL: https://${API_HOST}/
       N8N_PROXY_HOPS: 1
       # ---- 时区 / 语言 ----
       GENERIC_TIMEZONE: ${TZ}
@@ -172,7 +172,7 @@ services:
     volumes:
       - n8n-data:/home/node/.n8n
       # 工作流定义文件挂载（用于版本化 import / 持续更新）
-      - ../n8n/workflows:/workflows:ro
+      - ../n8n:/workflows:ro
     expose:
       - "5678"
     healthcheck:
@@ -181,6 +181,78 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+        reservations:
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # N8N Worker - queue mode 消费者。生产 queue 模式没有 worker 会导致任务入队后无人执行。
+  # ---------------------------------------------------------------------------
+  n8n-worker:
+    image: n8nio/n8n:${N8N_VERSION:-1.85.4}
+    container_name: cf-n8n-worker
+    restart: unless-stopped
+    command: worker
+    networks:
+      - cf-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}
+      WEBHOOK_URL: https://${API_HOST}/
+      N8N_PROXY_HOPS: 1
+      GENERIC_TIMEZONE: ${TZ}
+      TZ: ${TZ}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      QUEUE_BULL_REDIS_PASSWORD: ${REDIS_PASSWORD}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_LOG_LEVEL: info
+      N8N_LOG_OUTPUT: console
+      NEWAPI_BASE_URL: ${NEWAPI_BASE_URL}
+      NEWAPI_KEY: ${NEWAPI_KEY}
+      ARK_API_KEY: ${ARK_API_KEY}
+      ARK_REGION: ${ARK_REGION}
+      ARK_ENDPOINT: ${ARK_ENDPOINT}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET}
+      OSS_BUCKET_RAW: ${OSS_BUCKET_RAW}
+      OSS_BUCKET_WORK: ${OSS_BUCKET_WORK}
+      OSS_BUCKET_DELIVER: ${OSS_BUCKET_DELIVER}
+      OSS_REGION: ${OSS_REGION}
+      OSS_ENDPOINT: ${OSS_ENDPOINT}
+      FEISHU_APP_ID: ${FEISHU_APP_ID}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET}
+      FEISHU_BITABLE_TOKEN: ${FEISHU_BITABLE_TOKEN}
+      FEISHU_ALERT_WEBHOOK: ${FEISHU_ALERT_WEBHOOK}
+      ASR_PROVIDER: ${ASR_PROVIDER}
+      ASR_API_KEY: ${ASR_API_KEY}
+      ASR_ENDPOINT: ${ASR_ENDPOINT}
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ../n8n:/workflows:ro
     deploy:
       resources:
         limits:

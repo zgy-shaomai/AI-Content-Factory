@@ -114,7 +114,7 @@ curl -X POST https://5dock.com/v1/chat/completions \
 curl -X POST https://ark.cn-beijing.volces.com/api/v3/images/generations \
   -H "Authorization: Bearer ${ARK_API_KEY}" \
   -d '{
-    "model": "doubao-seedream-4-0-250528",
+    "model": "doubao-seedream-4-0-250828",
     "prompt": "<上一步 LLM 返回的 prompt 字符串>",
     "size": "720x1280",
     "guidance_scale": 3,

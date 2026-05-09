@@ -242,7 +242,7 @@ def patch_postgres_params_for_n8n_2_19(wf_data, filename):
         )
         finalize = find_node(wf_data, "Finalize run status")
         if finalize:
-            finalize.setdefault("parameters", {})["query"] = "UPDATE generation_runs SET status = (CASE WHEN (SELECT COUNT(*) FROM candidates WHERE run_id = $1::uuid AND status != 'failed') >= 11 THEN 'succeeded' WHEN (SELECT COUNT(*) FROM candidates WHERE run_id = $1::uuid AND status != 'failed') > 0 THEN 'partial' ELSE 'failed' END)::run_status, finished_at = now() WHERE id = $1::uuid RETURNING status;"
+            finalize.setdefault("parameters", {})["query"] = "WITH counts AS (SELECT gr.id AS run_id, gr.task_id, t.requested_count, COUNT(c.id) FILTER (WHERE c.status != 'failed') AS ok_count FROM generation_runs gr JOIN tasks t ON t.id = gr.task_id LEFT JOIN candidates c ON c.run_id = gr.id WHERE gr.id = $1::uuid GROUP BY gr.id, gr.task_id, t.requested_count), updated_run AS (UPDATE generation_runs gr SET status = (CASE WHEN counts.ok_count >= counts.requested_count THEN 'succeeded' WHEN counts.ok_count > 0 THEN 'partial' ELSE 'failed' END)::run_status, finished_at = now() FROM counts WHERE gr.id = counts.run_id RETURNING gr.task_id, gr.status), updated_task AS (UPDATE tasks t SET status = (CASE WHEN updated_run.status IN ('succeeded','partial') THEN 'candidates_ready' ELSE 'failed_recoverable' END)::task_status, finished_at = CASE WHEN updated_run.status = 'succeeded' THEN now() ELSE t.finished_at END, updated_at = now() FROM updated_run WHERE t.id = updated_run.task_id RETURNING t.status) SELECT status FROM updated_run;"
 
         compute = find_node(wf_data, "Compute OSS key")
         insert_candidate = find_node(wf_data, "Insert candidate")
@@ -370,7 +370,7 @@ return parsed.prompts.slice(0, 11).map((p, idx) => ({
             "={{ [$('Webhook - /trigger/video').item.json.body.task_id] }}",
         )
         set_pg_query_replacement(
-            find_node(wf_data, "INSERT video_candidates"),
+            find_node(wf_data, "INSERT video candidate") or find_node(wf_data, "INSERT video_candidates"),
             "={{ [$json.task_id, 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1.mp4', 'https://content-factory.oss-cn-shanghai.aliyuncs.com/videos/'+$now.format('yyyyMM')+'/'+$json.task_id+'/candidate_1_thumb.jpg', JSON.stringify($('Parse Storyboard').first().json.storyboard)] }}",
         )
 

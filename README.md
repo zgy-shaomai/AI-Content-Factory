@@ -3,7 +3,7 @@
 > 客户：服装电商（运动内衣 / 运动服 / 瑜伽裤）
 > 工期：20-30 个工作日
 > 目标：搭建可复用的图片链路 + 视频链路内容生产系统，单产品打样后可复用到多产品
-> 验收口径："工作流产出效果与甲方提供样本一样或更高"
+> 验收口径：以 `docs/acceptance-rubric.md` 的评分表为准，不再使用不可量化的“同样或更高”单句口径。
 
 ---
 
@@ -22,7 +22,7 @@
 | 工作流引擎 | N8N（自托管 docker） | 老板看节点 / 员工看封装 |
 | 图片生成 | Seedream 4.0（火山引擎方舟） | 服装类对参考图驱动支持好 |
 | 视频生成 | Seedance 2.0（火山引擎方舟） | 与视频项目方案 4 复用 |
-| LLM | Claude Sonnet 4.5 via 5dock NewAPI | 走公司统一中转 |
+| LLM | Claude Sonnet 4.5 model id via 5dock NewAPI | 走公司统一中转；以 `docs/model-matrix.md` 为唯一模型真源 |
 | 任务输入 / 审核 | 飞书多维表 | 不写自定义前端 |
 | 媒体存储 | 阿里云 OSS | CDN 现成 |
 | 任务库 | PostgreSQL 16 | 同 VPS docker |
@@ -52,6 +52,10 @@
 01-内容工厂项目/
 ├── README.md                        ← 你正在看的文件
 ├── docs/                            ← 所有设计文档
+│   ├── phase-0-charter.md           （Phase 0 目标 / 非目标 / 退出条件）
+│   ├── acceptance-rubric.md         （客户验收评分表）
+│   ├── model-matrix.md              （模型 ID / endpoint / fallback 真源）
+│   ├── risk-register.md             （风险、owner、trigger、fallback）
 │   ├── architecture.md              （总架构 + 演示讲稿）
 │   ├── image-pipeline.md            （图片链路完整说明）
 │   ├── video-pipeline.md            （视频链路完整说明）
@@ -85,7 +89,9 @@
 
 ---
 
-## 五、5 分钟把 demo 跑起来
+## 五、已有环境下 5 分钟触发 demo
+
+> 注意：Docker、N8N owner 账号、API key、workflow import、飞书表结构首次配置不计入这 5 分钟。完整本地搭建看 `SETUP.md`。
 
 ```bash
 # 1. 进入部署目录
@@ -128,6 +134,11 @@ curl -X POST https://api.<你的域名>/webhook/trigger/image \
 
 如果 demo 当场翻车（API 超时 / 生成质量差 / 网络卡），翻 `docs/demo-script.md` 末尾的"应急预案"。
 
+演示必须透明标注：
+
+- `LIVE`：现场真实触发的任务。
+- `PRE-GENERATED`：预生成兜底资产，只证明目标效果，不伪装成现场刚生成。
+
 ---
 
 ## 七、客户必须确认的事（演示后立刻问）
@@ -138,6 +149,7 @@ curl -X POST https://api.<你的域名>/webhook/trigger/image \
 - [ ] 模特是否用真人脸？是否有版权 / 肖像授权问题？
 - [ ] 首期核心产品确定是什么？（YN-BRA-001 是我们假设的，要换成客户真实 SKU）
 - [ ] 验收标准里"一样或更高"是谁说了算？需不需要客户指定 1-3 名审核人？
+- [ ] 是否认可 `docs/acceptance-rubric.md` 的评分维度、权重和通过线？
 - [ ] VPS 谁出？我方代部署还是客户自部署？
 - [ ] 内容版权归属（生成图 / 生成视频）默认归甲方，需要写进合同吗？
 

@@ -3,6 +3,7 @@
 > 5 个子 agent 并行产出本项目的所有文档与代码骨架。它们没有看到彼此的输出，因此最初存在几处**命名/结构不对齐**。
 > **截止 2026-05-08，所有不一致已经修完，N8N workflow 直接 import 即可正常调 Postgres 节点。**
 > 本文件保留作为修复记录与设计决策档案。
+> **2026-05-09 更新**：正式契约以 `schemas/postgres-init.sql`、`scripts/quality_gate.py`、`docs/model-matrix.md` 为准；`partial / pending_review / failed` 已进入主 enum 定义，N8N Postgres 节点以 `options.queryReplacement` 为标准，不再保留旧 `queryParams` 作为运行口径。
 
 ---
 
@@ -12,7 +13,7 @@
 |---|---|---|
 | 1 | image / video workflow 用了不同的 N8N credential ID（`cred-pg-content-factory` vs `PG_CONTENT_FACTORY` 等）| 统一为 image agent 的 kebab-case 命名，video JSON 6 处替换 |
 | 2 | Postgres 表都在 `content_factory` schema 但 N8N query 没加 schema 前缀 | SQL 末尾加 `ALTER DATABASE ... SET search_path TO content_factory, public`，让所有新连接自动套 schema |
-| 3 | run_status / candidate_status enum 缺 workflow 用到的状态值 | SQL 末尾 `ALTER TYPE ADD VALUE` 补 `'partial'`（run_status）、`'pending_review'`、`'failed'`（candidate_status）|
+| 3 | run_status / candidate_status enum 缺 workflow 用到的状态值 | 已进入主 enum 定义；SQL 末尾只保留老库兼容升级 |
 | 4 | image-workflow Q1 引用了不存在的列（name_cn / attributes_json / canonical_model_ref / brand_palette / model_descriptor / lighting / composition / lens / mood / negative_prompt 等）| 改写 SELECT，用真实列名加 `AS 别名` 暴露给下游 N8N 节点；style_template_id 从 `t.style_template_id` 改成 `p.style_template_id`（schema 是放在 products 上）|
 | 5 | image-workflow Q2 INSERT generation_runs 列不对齐（product_id / run_type / params_json 不存在）| 改写 INSERT 用 schema 真列：`task_id / sequence_no / model_provider / model_name / purpose / input_payload`，product_id 通过 `input_payload \|\| jsonb_build_object('product_id', $2)` 塞进 jsonb |
 | 6 | image-workflow Q3 INSERT candidates 列严重不对齐（product_id / shot_id / shot_type / prompt_text / oss_key 等都不在 schema）| 改写 INSERT，主键列用 schema 真列（task_id / run_id / media_type / oss_url / thumbnail_url / prompt_snapshot / parameters_snapshot / status / sequence_no），其他全部塞进 `parameters_snapshot` JSONB；task_id 通过 `SELECT FROM generation_runs WHERE id = $1` 反查 |
@@ -28,7 +29,7 @@
 3 件事并用：
 1. **扩 enum**（不改语义）：补 'partial' / 'pending_review' / 'failed'
 2. **改 SQL query**（动 N8N JSON 里的 query 字符串）：让列名 / 表名对齐 schema
-3. **保留 N8N 节点结构和 queryParams 顺序**：所有 query 的 `$1, $2, ..., $N` 参数个数和顺序与原版一致，避免动节点定义
+3. **统一 N8N Postgres 参数绑定方式**：新版 workflow 使用 `options.queryReplacement`，并保留 `$1, $2, ..., $N` 的参数个数和顺序
 
 ---
 
@@ -103,7 +104,7 @@
 修复后两个 workflow JSON 的 SQL 都已经：
 
 - 用 schema 真实列名 / 表名
-- queryParams 的参数个数和顺序与原版完全一致（不动 N8N 节点定义）
+- `options.queryReplacement` 的参数个数和顺序与 SQL 占位符一致
 - enum 字面量都在 ALTER TYPE 之后合法
 - JSON 仍然合法（`python3 json.load` 双 PASS）
 

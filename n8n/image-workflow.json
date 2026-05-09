@@ -40,8 +40,7 @@
         "operation": "executeQuery",
         "query": "INSERT INTO generation_runs (id, task_id, sequence_no, model_provider, model_name, purpose, status, started_at, input_payload) VALUES (gen_random_uuid(), $1::uuid, COALESCE((SELECT MAX(sequence_no)+1 FROM generation_runs WHERE task_id = $1::uuid), 1), 'volcengine_ark', 'doubao-seedream-4-0-250828', 'image_product', 'running', now(), ($3::jsonb) || jsonb_build_object('product_id', $2)) RETURNING id;",
         "options": {
-          "queryReplacement": "={{ [$json.task_id, $json.product_id, JSON.stringify({ trigger: 'webhook', shot_set: 'full' })] }}",
-          "queryParams": "={{$json.task_id}},{{$json.product_id}},{{ JSON.stringify({ trigger: 'webhook', shot_set: $('Webhook · /trigger/image').item.json.body.shot_set || 'full' }) }}"
+          "queryReplacement": "={{ [$json.task_id, $json.product_id, JSON.stringify({ trigger: 'webhook', shot_set: 'full' })] }}"
         }
       },
       "id": "a1f2c3d4-1103-4003-8103-111111111103",
@@ -260,8 +259,7 @@
         "operation": "executeQuery",
         "query": "INSERT INTO candidates (id, task_id, run_id, media_type, oss_url, thumbnail_url, prompt_snapshot, parameters_snapshot, status, sequence_no, created_at) SELECT gen_random_uuid(), gr.task_id, $1::uuid, 'image', $13, $14, $5, jsonb_build_object('product_id', $2, 'shot_id', $3, 'shot_type', $4, 'negative_prompt', $6, 'model_name', 'doubao-seedream-4-0-250828', 'model_provider', 'volcengine_ark', 'seed', $7, 'ref_image_ids', $8::jsonb, 'guidance_scale', $9, 'image_size', $10, 'oss_key', $11, 'oss_thumb_key', $12, 'ark_request_id', $15, 'generation_cost_cny', $16) || ($17::jsonb), 'pending_review', COALESCE((SELECT MAX(sequence_no)+1 FROM candidates WHERE task_id = gr.task_id), 1), now() FROM generation_runs gr WHERE gr.id = $1::uuid RETURNING id;",
         "options": {
-          "queryReplacement": "={{ [$json.run_id, $json.product_id, $json.shot_id, $json.shot_type, $json.en_prompt, $json.negative_prompt, $json.seed, JSON.stringify($json.ref_image_ids), $json.guidance_scale, $json.suggested_size, $json.oss_key, $json.oss_thumb_key, $json.oss_url, $json.oss_thumb_url, $json.ark_request_id, $json.generation_cost_cny, JSON.stringify({ logo_preserved: true, fabric_keywords: ['breathable mesh','sweat-wicking nylon-spandex'], brand_palette_hash: 'sha1:matteblack-v1', image_bytes: $json.image_bytes })] }}",
-          "queryParams": "={{$json.run_id}},{{$json.product_id}},{{$json.shot_id}},{{$json.shot_type}},{{$json.en_prompt}},{{$json.negative_prompt}},{{$json.seed}},{{ JSON.stringify($json.ref_image_ids) }},{{$json.guidance_scale}},{{$json.suggested_size}},{{$json.oss_key}},{{$json.oss_thumb_key}},{{$json.oss_url}},{{$json.oss_thumb_url}},{{$json.ark_request_id}},{{$json.generation_cost_cny}},{{ JSON.stringify({ logo_preserved: true, fabric_keywords: ['breathable mesh','sweat-wicking nylon-spandex'], brand_palette_hash: 'sha1:matteblack-v1', image_bytes: $json.image_bytes }) }}"
+          "queryReplacement": "={{ [$json.run_id, $json.product_id, $json.shot_id, $json.shot_type, $json.en_prompt, $json.negative_prompt, $json.seed, JSON.stringify($json.ref_image_ids), $json.guidance_scale, $json.suggested_size, $json.oss_key, $json.oss_thumb_key, $json.oss_url, $json.oss_thumb_url, $json.ark_request_id, $json.generation_cost_cny, JSON.stringify({ logo_preserved: true, fabric_keywords: ['breathable mesh','sweat-wicking nylon-spandex'], brand_palette_hash: 'sha1:matteblack-v1', image_bytes: $json.image_bytes })] }}"
         }
       },
       "id": "a1f2c3d4-1113-4013-8113-111111111113",
@@ -338,8 +336,7 @@
         "operation": "executeQuery",
         "query": "UPDATE generation_runs SET status = 'failed', error_message = ($2::text || ': ' || $3::text), finished_at = now() WHERE id = $1::uuid;",
         "options": {
-          "queryReplacement": "={{ [$('Postgres бд Insert generation_run').item.json.id, 'upstream_failure', JSON.stringify($json.error || $json)] }}",
-          "queryParams": "={{ $('Postgres · Insert generation_run').item.json.id }},upstream_failure,{{ JSON.stringify($json.error || $json) }}"
+          "queryReplacement": "={{ [$('Postgres · Insert generation_run').item.json.id, 'upstream_failure', JSON.stringify($json.error || $json)] }}"
         }
       },
       "id": "a1f2c3d4-1116-4016-8116-111111111116",
@@ -380,10 +377,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "UPDATE generation_runs SET status = CASE WHEN (SELECT COUNT(*) FROM candidates WHERE run_id = $1::uuid AND status != 'failed') >= 11 THEN 'succeeded' WHEN (SELECT COUNT(*) FROM candidates WHERE run_id = $1::uuid AND status != 'failed') > 0 THEN 'partial' ELSE 'failed' END, finished_at = now() WHERE id = $1::uuid RETURNING status;",
+        "query": "WITH counts AS (SELECT gr.id AS run_id, gr.task_id, t.requested_count, COUNT(c.id) FILTER (WHERE c.status != 'failed') AS ok_count FROM generation_runs gr JOIN tasks t ON t.id = gr.task_id LEFT JOIN candidates c ON c.run_id = gr.id WHERE gr.id = $1::uuid GROUP BY gr.id, gr.task_id, t.requested_count), updated_run AS (UPDATE generation_runs gr SET status = (CASE WHEN counts.ok_count >= counts.requested_count THEN 'succeeded' WHEN counts.ok_count > 0 THEN 'partial' ELSE 'failed' END)::run_status, finished_at = now() FROM counts WHERE gr.id = counts.run_id RETURNING gr.task_id, gr.status), updated_task AS (UPDATE tasks t SET status = (CASE WHEN updated_run.status IN ('succeeded','partial') THEN 'candidates_ready' ELSE 'failed_recoverable' END)::task_status, finished_at = CASE WHEN updated_run.status = 'succeeded' THEN now() ELSE t.finished_at END, updated_at = now() FROM updated_run WHERE t.id = updated_run.task_id RETURNING t.status) SELECT status FROM updated_run;",
         "options": {
-          "queryReplacement": "={{ [$('Postgres бд Insert generation_run').item.json.id] }}",
-          "queryParams": "={{ $('Postgres · Insert generation_run').item.json.id }}"
+          "queryReplacement": "={{ [$('Postgres · Insert generation_run').item.json.id] }}"
         }
       },
       "id": "a1f2c3d4-1118-4018-8118-111111111118",
@@ -399,14 +395,11 @@
       }
     },
     {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={ \"ok\": true, \"run_id\": \"{{ $('Postgres · Insert generation_run').item.json.id }}\", \"task_id\": \"{{ $('Postgres · Load product+style').item.json.task_id }}\", \"sku\": \"{{ $('Postgres · Load product+style').item.json.sku }}\", \"final_status\": \"{{ $json.status }}\" }"
-      },
+      "parameters": {},
       "id": "a1f2c3d4-1119-4019-8119-111111111119",
-      "name": "Respond · final summary",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.1,
+      "name": "NoOp · async final marker",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
       "position": [1700, -120]
     }
   ],
@@ -534,7 +527,7 @@
     "Postgres · Finalize run status": {
       "main": [
         [
-          { "node": "Respond · final summary", "type": "main", "index": 0 }
+          { "node": "NoOp · async final marker", "type": "main", "index": 0 }
         ]
       ]
     }

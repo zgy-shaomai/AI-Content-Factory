@@ -85,7 +85,7 @@ try {
         size = '1024x1024'
         watermark = $false
     } | ConvertTo-Json -Depth 8
-    $Resp = Invoke-RestMethod -Method Post -Uri "$ArkBase/images/generations" -Headers @{ Authorization = "Bearer $ArkKey" } -ContentType 'application/json' -Body $Body
+    $Resp = Invoke-RestMethod -Method Post -Uri "$ArkBase/images/generations" -Headers @{ Authorization = "Bearer $ArkKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
     $Url = $Resp.data[0].url
     if ($Url) {
         Write-Host "  OK image generation succeeded: $Url" -ForegroundColor Green
@@ -114,7 +114,7 @@ try {
             }
         )
     } | ConvertTo-Json -Depth 10
-    $Resp = Invoke-RestMethod -Method Post -Uri "$ArkBase/contents/generations/tasks" -Headers @{ Authorization = "Bearer $ArkKey" } -ContentType 'application/json' -Body $Body
+    $Resp = Invoke-RestMethod -Method Post -Uri "$ArkBase/contents/generations/tasks" -Headers @{ Authorization = "Bearer $ArkKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
     $TaskId = $Resp.id
     if ($TaskId) {
         Write-Host "  OK video task submitted: task_id=$TaskId" -ForegroundColor Green
@@ -145,7 +145,7 @@ try {
         )
         max_tokens = 10
     } | ConvertTo-Json -Depth 10
-    $Resp = Invoke-RestMethod -Method Post -Uri "$NewApiBase/chat/completions" -Headers @{ Authorization = "Bearer $NewApiKey" } -ContentType 'application/json' -Body $Body
+    $Resp = Invoke-RestMethod -Method Post -Uri "$NewApiBase/chat/completions" -Headers @{ Authorization = "Bearer $NewApiKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
     $Text = $Resp.choices[0].message.content
     if ($Text) {
         Write-Host "  OK Claude response: $Text" -ForegroundColor Green

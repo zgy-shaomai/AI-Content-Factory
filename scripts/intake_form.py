@@ -7,6 +7,8 @@ import json
 import urllib.request, urllib.parse, urllib.error
 import subprocess
 import sys
+import html
+import re
 
 import os, mimetypes
 from pathlib import Path
@@ -18,6 +20,8 @@ if hasattr(sys.stderr, "reconfigure"):
 
 PORT = 5001
 PG_CONTAINER = "cf-postgres-local"
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+EXTERNAL_TASK_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 VIDEO_DIR = Path(__file__).parent.parent / "_demo_seed" / "videos"
 AUDIO_DIR = Path(__file__).parent.parent / "_demo_seed" / "audio"
 
@@ -35,6 +39,8 @@ def _load_env_local():
     return out
 
 _env = _load_env_local()
+POSTGRES_DB = _env.get("POSTGRES_DB") or os.environ.get("POSTGRES_DB", "content_factory")
+POSTGRES_USER = _env.get("POSTGRES_USER") or os.environ.get("POSTGRES_USER", "postgres")
 N8N_BASE = (_env.get("N8N_BASE") or os.environ.get("N8N_BASE", "http://localhost:5678")).rstrip("/")
 N8N_TRIGGER = f"{N8N_BASE}/webhook/trigger/image"
 N8N_EDITOR_URL = (_env.get("N8N_EDITOR_URL") or os.environ.get("N8N_EDITOR_URL") or f"{N8N_BASE}/home/workflows")
@@ -1469,76 +1475,142 @@ poll();
 #  Backend logic
 # ============================================================================
 def pg(sql):
-    r = subprocess.run(
-        ["docker","exec",PG_CONTAINER,"psql","-U","postgres","-d","content_factory","-q","-tAc",sql],
-        capture_output=True, text=True, encoding="utf-8")
-    stdout = (r.stdout or "").strip()
-    lines = [ln for ln in stdout.split("\n")
-             if ln and not ln.startswith(("UPDATE ","INSERT ","DELETE ","SELECT "))]
-    return (lines[0].strip() if lines else ""), (r.stderr or "").strip()
+    return pg_vars(sql)
 
 
 def pg_rows(sql):
-    r = subprocess.run(
-        ["docker","exec",PG_CONTAINER,"psql","-U","postgres","-d","content_factory","-q","-tAc",sql],
-        capture_output=True, text=True, encoding="utf-8")
+    return pg_rows_vars(sql)
+
+
+def _run_psql(sql, vars=None):
+    args = [
+        "docker", "exec", "-i", PG_CONTAINER,
+        "psql", "-U", POSTGRES_USER, "-d", POSTGRES_DB,
+        "-qAtX", "-F", "\t", "-v", "ON_ERROR_STOP=1"
+    ]
+    for key, value in (vars or {}).items():
+        args.extend(["-v", f"{key}={value}"])
+    r = subprocess.run(args, input=sql, capture_output=True, text=True, encoding="utf-8")
     stdout = (r.stdout or "").strip()
-    return [ln for ln in stdout.split("\n") if ln and "|" in ln], (r.stderr or "").strip()
+    stderr = (r.stderr or "").strip()
+    return stdout, stderr
+
+
+def pg_vars(sql, vars=None):
+    stdout, stderr = _run_psql(sql, vars)
+    lines = [ln for ln in stdout.split("\n") if ln and not ln.startswith(("UPDATE ", "INSERT ", "DELETE ", "SELECT "))]
+    return (lines[0].strip() if lines else ""), stderr
+
+
+def pg_rows_vars(sql, vars=None):
+    stdout, stderr = _run_psql(sql, vars)
+    return [ln for ln in stdout.split("\n") if ln and "\t" in ln], stderr
+
+
+def validate_uuid(value, field_name):
+    if not value or not UUID_RE.match(value):
+        raise ValueError(f"{field_name} 必须是 UUID")
+    return value.lower()
+
+
+def sanitize_task_token(value, field_name):
+    if not value or not EXTERNAL_TASK_RE.match(value):
+        raise ValueError(f"{field_name} 含有非法字符")
+    return value
+
+
+def h(value):
+    return html.escape(str(value or ""), quote=True)
+
+
+def safe_http_url(value):
+    try:
+        parsed = urllib.parse.urlparse(value or "")
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            return value
+    except Exception:
+        pass
+    return ""
 
 
 def upsert_product_and_task(form):
     """每次提交：upsert product + 新建 task（保留历史）"""
-    sku = form.get("sku",["YN-BRA-001"])[0]
-    name = form.get("name",[""])[0].replace("'","''")
-    category = form.get("category",[""])[0].replace("'","''")
-    selling_points = [s.strip() for s in form.get("selling_points",[""])[0].split("\n") if s.strip()]
-    primary_color = form.get("primary_color",[""])[0].replace("'","''")
-    target_audience = form.get("target_audience",[""])[0].replace("'","''")
-    scenarios = [s.strip() for s in form.get("scenarios",[""])[0].split("\n") if s.strip()]
+    sku = form.get("sku", ["YN-BRA-001"])[0].strip()[:64]
+    name = form.get("name", [""])[0].strip()[:160]
+    category = form.get("category", [""])[0].strip()[:64]
+    selling_points = [s.strip()[:120] for s in form.get("selling_points", [""])[0].split("\n") if s.strip()]
+    primary_color = form.get("primary_color", [""])[0].strip()[:32]
+    target_audience = form.get("target_audience", [""])[0].strip()[:120]
+    scenarios = [s.strip()[:80] for s in form.get("scenarios", [""])[0].split("\n") if s.strip()]
+    if not sku or not name:
+        return None, "SKU 和产品名称必填"
 
-    sp_pg = "ARRAY[" + ",".join("'"+p.replace("'","''")+"'" for p in selling_points) + "]"
-    sc_pg = "ARRAY[" + ",".join("'"+p.replace("'","''")+"'" for p in scenarios) + "]" if scenarios else "ARRAY[]::text[]"
-
-    # 1. 拿 tenant + style_template（用第一个，简化）
-    tenant_id, _ = pg("SELECT id FROM content_factory.tenants LIMIT 1;")
-    style_id, _ = pg("SELECT id FROM content_factory.style_templates LIMIT 1;")
-    if not tenant_id: return None, "没有 tenant，schema seed 缺失"
-
-    style_clause = "NULL" if not style_id else "'" + style_id + "'::uuid"
-    # 2. UPSERT product（按 sku 更新，没有则新建）
-    upsert_sql = (
-        f"INSERT INTO content_factory.products "
-        f"(tenant_id, sku, name, category, selling_points, target_audience, use_scenarios, "
-        f"primary_color, reference_image_urls, style_template_id) "
-        f"VALUES ('{tenant_id}'::uuid, '{sku}', '{name}', '{category}', {sp_pg}, "
-        f"'{target_audience}', {sc_pg}, '{primary_color}', ARRAY[]::text[], "
-        f"{style_clause}) "
-        f"ON CONFLICT (tenant_id, sku) DO UPDATE SET "
-        f"name=EXCLUDED.name, category=EXCLUDED.category, selling_points=EXCLUDED.selling_points, "
-        f"target_audience=EXCLUDED.target_audience, use_scenarios=EXCLUDED.use_scenarios, "
-        f"primary_color=EXCLUDED.primary_color, updated_at=now() "
-        f"RETURNING id;"
-    )
-    out, err = pg(upsert_sql)
+    # psql :'var' performs SQL literal quoting; arrays are passed as JSON then expanded in SQL.
+    vars = {
+        "sku": sku,
+        "name": name,
+        "category": category,
+        "selling_points_json": json.dumps(selling_points, ensure_ascii=False),
+        "primary_color": primary_color,
+        "target_audience": target_audience,
+        "scenarios_json": json.dumps(scenarios, ensure_ascii=False),
+    }
+    upsert_sql = """
+WITH defaults AS (
+  SELECT
+    (SELECT id FROM content_factory.tenants ORDER BY created_at LIMIT 1) AS tenant_id,
+    (SELECT id FROM content_factory.style_templates ORDER BY created_at LIMIT 1) AS style_template_id,
+    COALESCE((SELECT array_agg(value) FROM jsonb_array_elements_text(:'selling_points_json'::jsonb)), ARRAY[]::text[]) AS selling_points,
+    COALESCE((SELECT array_agg(value) FROM jsonb_array_elements_text(:'scenarios_json'::jsonb)), ARRAY[]::text[]) AS scenarios
+),
+upserted AS (
+  INSERT INTO content_factory.products (
+    tenant_id, sku, name, category, selling_points, target_audience, use_scenarios,
+    primary_color, reference_image_urls, style_template_id
+  )
+  SELECT
+    tenant_id, :'sku', :'name', :'category', selling_points, :'target_audience', scenarios,
+    :'primary_color', ARRAY[]::text[], style_template_id
+  FROM defaults
+  WHERE tenant_id IS NOT NULL
+  ON CONFLICT (tenant_id, sku) DO UPDATE SET
+    name = EXCLUDED.name,
+    category = EXCLUDED.category,
+    selling_points = EXCLUDED.selling_points,
+    target_audience = EXCLUDED.target_audience,
+    use_scenarios = EXCLUDED.use_scenarios,
+    primary_color = EXCLUDED.primary_color,
+    updated_at = now()
+  RETURNING id
+)
+SELECT id FROM upserted;
+"""
+    out, err = pg_vars(upsert_sql, vars)
     if err and "ERROR" in err: return None, f"PG UPSERT: {err[:300]}"
-    if not out: return None, f"product upsert 失败"
+    if not out: return None, "product upsert 失败：没有 tenant seed 数据"
     pid = out
 
     # 3. **新建** task（不复用旧的）
-    task_title = name.replace("'", "''")[:60] + " - " + sku
-    new_task_sql = (
-        f"INSERT INTO content_factory.tasks "
-        f"(tenant_id, product_id, pipeline, status, title, requested_count, parameters) "
-        f"VALUES ('{tenant_id}'::uuid, '{pid}'::uuid, 'image', 'pending', '{task_title}', 11, '{{}}'::jsonb) "
-        f"RETURNING id;"
-    )
-    tid, err = pg(new_task_sql)
+    task_title = f"{name[:60]} - {sku}"
+    new_task_sql = """
+INSERT INTO content_factory.tasks
+  (tenant_id, product_id, pipeline, status, title, requested_count, parameters)
+SELECT tenant_id, id, 'image', 'pending', :'task_title', 11, '{}'::jsonb
+FROM content_factory.products
+WHERE id = :'product_id'::uuid
+RETURNING id;
+"""
+    tid, err = pg_vars(new_task_sql, {"product_id": pid, "task_title": task_title})
     if err and "ERROR" in err: return None, f"PG task INSERT: {err[:300]}"
     if not tid: return None, "task 创建失败"
     return tid, None
 
 
 def trigger_n8n(task_id):
+    try:
+        task_id = validate_uuid(task_id, "task_id")
+    except ValueError as e:
+        return 400, str(e)
     body = json.dumps({"task_id":task_id}).encode()
     req = urllib.request.Request(N8N_TRIGGER, data=body,
         headers={"Content-Type":"application/json"}, method="POST")
@@ -1551,9 +1623,11 @@ def trigger_n8n(task_id):
 
 def get_candidate_url(task_id, seq):
     """拿这个 task 的第 N 张候选图 URL"""
-    out, _ = pg(
-        f"SELECT oss_url FROM content_factory.candidates "
-        f"WHERE task_id='{task_id}'::uuid AND sequence_no={int(seq)} LIMIT 1;"
+    task_id = validate_uuid(task_id, "task_id")
+    seq = max(1, min(int(seq), 99))
+    out, _ = pg_vars(
+        "SELECT oss_url FROM content_factory.candidates WHERE task_id = :'task_id'::uuid AND sequence_no = :'seq'::int LIMIT 1;",
+        {"task_id": task_id, "seq": str(seq)}
     )
     return out
 
@@ -1586,6 +1660,10 @@ def seedance_submit(image_url, text_prompt, duration=12, ratio="9:16"):
 
 def seedance_poll(seedance_task_id):
     """查 Seedance 任务状态。返回 {status, video_url?, error?}"""
+    try:
+        seedance_task_id = sanitize_task_token(seedance_task_id, "seedance_task_id")
+    except ValueError as e:
+        return {"status": "error", "error": str(e)}
     req = urllib.request.Request(
         f"{ARK_BASE}/contents/generations/tasks/{seedance_task_id}",
         headers={"Authorization": f"Bearer {ARK_API_KEY}"},
@@ -1621,18 +1699,20 @@ def seedance_poll(seedance_task_id):
 
 
 def get_status(task_id):
-    rows, _ = pg_rows(
-        f"SELECT id::text, oss_url, COALESCE(parameters_snapshot->>'shot_type','') AS shot, sequence_no "
-        f"FROM content_factory.candidates WHERE task_id='{task_id}'::uuid ORDER BY sequence_no;"
+    task_id = validate_uuid(task_id, "task_id")
+    rows, _ = pg_rows_vars(
+        "SELECT id::text, oss_url, COALESCE(parameters_snapshot->>'shot_type','') AS shot, sequence_no "
+        "FROM content_factory.candidates WHERE task_id = :'task_id'::uuid ORDER BY sequence_no;",
+        {"task_id": task_id}
     )
     cands = []
     for ln in rows:
-        parts = ln.split("|")
+        parts = ln.split("\t")
         if len(parts) >= 3:
             cands.append({"id":parts[0].strip()[:8],"url":parts[1].strip(),"shot":parts[2].strip()})
-    run_status, _ = pg(
-        f"SELECT status FROM content_factory.generation_runs "
-        f"WHERE task_id='{task_id}'::uuid ORDER BY started_at DESC LIMIT 1;"
+    run_status, _ = pg_vars(
+        "SELECT status FROM content_factory.generation_runs WHERE task_id = :'task_id'::uuid ORDER BY started_at DESC LIMIT 1;",
+        {"task_id": task_id}
     )
     return {"status": run_status or "running", "candidates": cands}
 
@@ -1656,6 +1736,10 @@ class Handler(BaseHTTPRequestHandler):
             qs = urllib.parse.urlparse(self.path).query
             tid = (urllib.parse.parse_qs(qs).get("task_id") or [""])[0]
             if not tid: self._send(400, "missing task_id"); return
+            try:
+                tid = validate_uuid(tid, "task_id")
+            except ValueError as e:
+                self._send(400, str(e)); return
             # 只有"演示样品"task（55555555-...）有真实预生成视频；其他任务显示空状态 + 模拟生成 CTA
             has_video = tid.startswith("55555555-5555")
             video_block = VIDEO_HAS if has_video else VIDEO_EMPTY
@@ -1670,7 +1754,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             qs = urllib.parse.urlparse(self.path).query
             tid = (urllib.parse.parse_qs(qs).get("task_id") or [""])[0]
-            data = get_status(tid) if tid else {"error":"missing task_id"}
+            try:
+                data = get_status(tid) if tid else {"error":"missing task_id"}
+            except ValueError as e:
+                data = {"error": str(e)}
             self._send(200, json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8")
         elif path == "/api/gen-video-status":
             qs = urllib.parse.urlparse(self.path).query
@@ -1724,7 +1811,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             cards_html = ""
             for r in rows:
-                p = r.split("|")
+                p = r.split("\t")
                 if len(p) >= 8:
                     tid, sku, name, cat, status, created, cnt, thumb = [x.strip() for x in p[:8]]
                     cnt = int(cnt) if cnt.isdigit() else 0
@@ -1732,21 +1819,22 @@ class Handler(BaseHTTPRequestHandler):
                     pill = ('<span class="pill-status pill-success"><span class="dot"></span>已完成</span>' if status in ('approved','archived','delivered') or cnt>=11
                             else '<span class="pill-status pill-running"><span class="dot"></span>生成中</span>' if status in ('analyzing','prompting','generating','reviewing','candidates_ready')
                             else '<span class="pill-status pill-failed"><span class="dot"></span>失败</span>' if 'failed' in status
-                            else f'<span class="pill-status" style="background:var(--slate-100);color:var(--slate-600)"><span class="dot"></span>{status}</span>')
-                    thumb_html = f'<img src="{thumb}" alt="" />' if thumb and thumb.startswith('http') else '<div class="thumb-empty">尚未生成</div>'
+                            else f'<span class="pill-status" style="background:var(--slate-100);color:var(--slate-600)"><span class="dot"></span>{h(status)}</span>')
+                    safe_thumb = safe_http_url(thumb)
+                    thumb_html = f'<img src="{h(safe_thumb)}" alt="" />' if safe_thumb else '<div class="thumb-empty">尚未生成</div>'
                     cards_html += f'''
-<a class="hist-card" href="/result?task_id={tid}">
+<a class="hist-card" href="/result?task_id={h(tid)}">
   <div class="hist-thumb">{thumb_html}</div>
   <div class="hist-body">
     <div class="hist-row1">
-      <span class="hist-sku">{sku}</span>
+      <span class="hist-sku">{h(sku)}</span>
       {pill}
     </div>
-    <div class="hist-name">{name}</div>
+    <div class="hist-name">{h(name)}</div>
     <div class="hist-meta">
-      <span>{cat}</span><span>·</span>
+      <span>{h(cat)}</span><span>·</span>
       <span>{cnt}/11 张</span><span>·</span>
-      <span>{created[:16]}</span>
+      <span>{h(created[:16])}</span>
     </div>
     <div class="hist-bar"><div class="hist-bar-fill" style="width:{pct}%"></div></div>
   </div>
@@ -1835,7 +1923,10 @@ class Handler(BaseHTTPRequestHandler):
             prompt = payload.get("prompt") or ""
             duration = int(payload.get("duration") or 12)
             ratio = payload.get("ratio") or "9:16"
-            img_url = get_candidate_url(tid, seq)
+            try:
+                img_url = get_candidate_url(tid, seq)
+            except ValueError as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False), "application/json; charset=utf-8"); return
             if not img_url:
                 self._send(404, json.dumps({"error":f"候选 #{seq} 未找到，可能还没生成"}), "application/json"); return
             if not prompt.strip():
@@ -1869,7 +1960,7 @@ class Handler(BaseHTTPRequestHandler):
                               .replace("{task_id_short}", "ERROR") \
                               .replace("{task_id}", "-") \
                               .replace("{n8n_editor_url}", N8N_EDITOR_URL) \
-                              .replace("{error_block}", f'<div class="err-card"><div class="err-title">录入失败</div><div class="err-msg">{err}</div></div>') \
+                              .replace("{error_block}", f'<div class="err-card"><div class="err-title">录入失败</div><div class="err-msg">{h(err)}</div></div>') \
                               .replace("{progress_block}", "") \
                               .replace("{poll_script}", "")
             self._send(500, html); return
@@ -1880,7 +1971,7 @@ class Handler(BaseHTTPRequestHandler):
                               .replace("{task_id_short}", tid[:8]) \
                               .replace("{task_id}", tid) \
                               .replace("{n8n_editor_url}", N8N_EDITOR_URL) \
-                              .replace("{error_block}", f'<div class="err-card"><div class="err-title">N8N 触发失败</div><div class="err-msg">HTTP {code} - {body[:200]}</div></div>') \
+                              .replace("{error_block}", f'<div class="err-card"><div class="err-title">N8N 触发失败</div><div class="err-msg">HTTP {code} - {h(body[:200])}</div></div>') \
                               .replace("{progress_block}", "") \
                               .replace("{poll_script}", "")
             self._send(500, html); return

@@ -241,9 +241,9 @@ curl -X POST https://api.<你的域名>/webhook/trigger/image \
 **症状**：在飞书点 approve，N8N 不动。
 
 **应对**：
-1. 嘴上：「这是飞书机器人偶发的回调延迟，正常 30 秒内会到——」
-2. 同时手工 curl `/webhook/audit/approve` 一下，假装是飞书发的。
-3. 客户不会注意到。
+1. 嘴上：「飞书事件有延迟。为了不浪费现场时间，我现在切到手动触发兜底路径，等同于把同一条审核事件直接打给 webhook。」
+2. 屏幕上明确标注 `MANUAL FALLBACK`，手工 curl `/webhook/audit/approve`。
+3. 回到飞书/DB 查看状态变化，说明真实飞书回调需要后续在客户租户里联调确认。
 
 ### 翻车 5：Postgres 节点报错（红色 error）
 

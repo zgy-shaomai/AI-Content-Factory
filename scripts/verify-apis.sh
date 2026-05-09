@@ -35,7 +35,7 @@ fi
 # 1. Seedream 4.0 - 出图
 # -----------------------------------------------------------------------------
 echo "${YLW}▶ [1/3] Seedream 4.0 出图测试...${NC}"
-SD_RESP=$(curl -sS -X POST https://ark.cn-beijing.volces.com/api/v3/images/generations \
+SD_RESP=$(curl -sS --connect-timeout 10 --max-time 60 -X POST https://ark.cn-beijing.volces.com/api/v3/images/generations \
     -H "Authorization: Bearer ${ARK_API_KEY}" \
     -H "Content-Type: application/json" \
     -d '{
@@ -59,7 +59,7 @@ fi
 # 2. Seedance 2.0 - 出视频任务（不等任务跑完，只验证能下单）
 # -----------------------------------------------------------------------------
 echo "${YLW}▶ [2/3] Seedance 2.0 视频任务下单测试...${NC}"
-SD2_RESP=$(curl -sS -X POST https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks \
+SD2_RESP=$(curl -sS --connect-timeout 10 --max-time 60 -X POST https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks \
     -H "Authorization: Bearer ${ARK_API_KEY}" \
     -H "Content-Type: application/json" \
     -d '{
@@ -84,7 +84,7 @@ fi
 # 3. 5dock NewAPI - Claude
 # -----------------------------------------------------------------------------
 echo "${YLW}▶ [3/3] 5dock NewAPI Claude Sonnet 4.6 测试...${NC}"
-CL_RESP=$(curl -sS https://5dock.com/v1/chat/completions \
+CL_RESP=$(curl -sS --connect-timeout 10 --max-time 60 https://5dock.com/v1/chat/completions \
     -H "Authorization: Bearer ${NEWAPI_KEY}" \
     -H "Content-Type: application/json" \
     -d '{

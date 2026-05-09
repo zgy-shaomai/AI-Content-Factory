@@ -47,7 +47,7 @@ stateDiagram-v2
 | `analyzing` | 卖点拆解中（LLM） | 创建 `generation_runs` (purpose=selling_point_extract) | 否 |
 | `prompting` | prompt 渲染中 | `generation_runs` 出参回写 `tasks.parameters` | 否 |
 | `generating` | 模型生成中 | 创建 `generation_runs` (purpose=image_*/video_*)；`tasks.started_at=now()` | 否 |
-| `candidates_ready` | 候选已产出 | 写入 N 条 `candidates` (status=new)；写飞书候选审核表 N 行 | 否 |
+| `candidates_ready` | 候选已产出 | 写入 N 条 `candidates` (status=pending_review)；写飞书候选审核表 N 行 | 否 |
 | `reviewing` | 审核中 | 候选 `status=in_review` | 否 |
 | `approved` | 任务整体通过 | `tasks.finished_at=now()`；触发归档 N8N | 否（再走 archived） |
 | `rejected` | 任务整体被驳回 | 写 `audit_log` 多条 reject；候选 `status=rejected` | 否（再走 regenerating） |
@@ -138,7 +138,7 @@ stateDiagram-v2
 ## 6. 不变式（DB 约束 + N8N 校验双层）
 
 1. 任意时刻同一 `task_id` 仅有一个非终态状态；
-2. `candidates_ready` 时 `candidates` 行数 == `tasks.requested_count`；不足则任务回 `generating`；
+2. `candidates_ready` 时 `candidates` 行数 >= `tasks.requested_count`；不足但已有产物时 `generation_runs.status=partial` 并进入人工判断；
 3. `approved` 时至少一条 `candidates.status='approved'`；
 4. `archived` 时必须存在对应 `archive` 行；
 5. `delivered` 时 `archive.is_delivered=true` AND `archive.delivered_at IS NOT NULL`；

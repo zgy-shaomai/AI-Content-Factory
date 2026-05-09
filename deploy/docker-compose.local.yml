@@ -87,7 +87,7 @@ services:
       retries: 10
 
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:${N8N_VERSION:-1.85.4}
     container_name: cf-n8n-local
     restart: unless-stopped
     networks:

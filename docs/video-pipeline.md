@@ -94,7 +94,7 @@
 └──────────────────────────────┬──────────────────────────────────────────┘
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ S12 Postgres 写 video_candidates；飞书多维表回写一行；飞书群消息通知    │
+│ S12 Postgres 写 candidates(media_type='video')；飞书多维表回写一行；飞书群消息通知 │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -141,7 +141,7 @@
   ```
   POST https://ark.cn-beijing.volces.com/api/v3/images/generations
   {
-    "model": "doubao-seedream-4-0-250528",
+    "model": "doubao-seedream-4-0-250828",
     "prompt": "<生成的英文 prompt>",
     "size": "720x1280",       // 9:16
     "response_format": "url",
@@ -244,7 +244,7 @@
 
 ### S12 落库 + 飞书回写
 
-- `INSERT INTO video_candidates (task_id, video_url, thumb_url, storyboard_json, prompts_json, status='pending_review') ...`。
+- `INSERT INTO candidates (task_id, media_type='video', oss_url, thumbnail_url, parameters_snapshot, status='pending_review') ...`。
 - 飞书多维表 `bitable.record.create`：写一行候选，附预览链接。
 - 飞书群机器人：`@运营`：`{SKU} 视频 #{candidate_n} 已生成，请审核：{cdn_url}`。
 

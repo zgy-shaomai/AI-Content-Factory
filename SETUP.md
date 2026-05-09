@@ -45,8 +45,8 @@ NEWAPI_KEY=sk-Joshua 给你的 5dock vip key
 ```
 
 说明：
-- `POSTGRES_PASSWORD` / `REDIS_PASSWORD` 可以先用示例默认值
-- 真正必填的是 `N8N_ENCRYPTION_KEY`
+- `POSTGRES_PASSWORD` / `REDIS_PASSWORD` / `N8N_ENCRYPTION_KEY` 是本地起栈必填项。
+- 演示机可以先用示例密码；`N8N_ENCRYPTION_KEY` 生成后不要改，否则 N8N credentials 会失效。
 - 想让图片/视频真跑起来，再填 `ARK_API_KEY` 和 `NEWAPI_KEY`
 
 生成 N8N 加密 key：
