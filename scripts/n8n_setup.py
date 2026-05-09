@@ -307,7 +307,26 @@ def patch_postgres_params_for_n8n_2_19(wf_data, filename):
             oss_upload["disabled"] = True
 
         load_node = find_node(wf_data, "Load product+style")
+        selling_points = find_node(wf_data, "Selling points")
         build_prompts = find_node(wf_data, "Build 11 prompts")
+        if load_node and selling_points:
+            load_name = load_node.get("name", "Postgres 路 Load product+style")
+            selling_points.setdefault("parameters", {})["jsonBody"] = """={{ {
+  "model": "claude-sonnet-4-5-20250929",
+  "temperature": 0.4,
+  "max_tokens": 2500,
+  "response_format": { "type": "json_object" },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a senior creative director for an apparel e-commerce content factory. Distill product attributes and Chinese marketing copy into 5-7 ranked selling points, each with rank, text_cn (≤18 chars), text_en, visual_hint, category. Output strict JSON only."
+    },
+    {
+      "role": "user",
+      "content": "=== ATTRIBUTES ===\\n" + JSON.stringify($('__LOAD_NODE__').item.json.attributes_json || {}) + "\\n\\n=== ORIGINAL CN COPY ===\\n" + JSON.stringify($('__LOAD_NODE__').item.json.raw_selling_points || []) + "\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: " + JSON.stringify($('__LOAD_NODE__').item.json.brand_palette || []) + "\\nmood: " + JSON.stringify($('__LOAD_NODE__').item.json.mood || "") + "\\n\\nReturn { \\\"selling_points\\\": [...] }."
+    }
+  ]
+} }}""".replace("__LOAD_NODE__", load_name)
         if load_node and build_prompts:
             load_name = load_node.get("name", "Postgres · Load product+style")
             build_prompts.setdefault("parameters", {})["jsonBody"] = """={{ {
@@ -322,7 +341,7 @@ def patch_postgres_params_for_n8n_2_19(wf_data, filename):
     },
     {
       "role": "user",
-      "content": "=== ATTRIBUTES ===\\n" + JSON.stringify($('__LOAD_NODE__').item.json.attributes_json) + "\\n\\n=== SELLING POINTS ===\\n" + $json.choices[0].message.content + "\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: " + JSON.stringify($('__LOAD_NODE__').item.json.brand_palette) + "\\nmodel_descriptor: " + JSON.stringify($('__LOAD_NODE__').item.json.model_descriptor) + "\\nlighting: " + ($('__LOAD_NODE__').item.json.lighting || "") + "\\ncomposition: " + ($('__LOAD_NODE__').item.json.composition || "") + "\\nlens: " + ($('__LOAD_NODE__').item.json.lens || "") + "\\nmood: " + ($('__LOAD_NODE__').item.json.mood || "") + "\\n\\nReturn JSON only."
+      "content": "=== ATTRIBUTES ===\\n" + JSON.stringify($('__LOAD_NODE__').item.json.attributes_json || {}) + "\\n\\n=== SELLING POINTS ===\\n" + JSON.stringify($json.choices?.[0]?.message?.content || "") + "\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: " + JSON.stringify($('__LOAD_NODE__').item.json.brand_palette || []) + "\\nmodel_descriptor: " + JSON.stringify($('__LOAD_NODE__').item.json.model_descriptor || []) + "\\nlighting: " + JSON.stringify($('__LOAD_NODE__').item.json.lighting || "") + "\\ncomposition: " + JSON.stringify($('__LOAD_NODE__').item.json.composition || "") + "\\nlens: " + JSON.stringify($('__LOAD_NODE__').item.json.lens || "") + "\\nmood: " + JSON.stringify($('__LOAD_NODE__').item.json.mood || "") + "\\n\\nReturn JSON only."
     }
   ]
 } }}""".replace("__LOAD_NODE__", load_name)
