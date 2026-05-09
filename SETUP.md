@@ -119,19 +119,28 @@ python scripts/n8n_setup.py
 python scripts/intake_form.py
 ```
 
-浏览器打开 **http://localhost:5001** —— 看到深色 hero + 录入表单就 OK 了。
+浏览器打开 **http://localhost:5001** —— 看到 ContentFactory 顶栏和录入表单就 OK 了。
+
+建议先做一轮最小前置检查，再开始演示：
+
+```powershell
+python -m py_compile scripts\intake_form.py scripts\n8n_setup.py scripts\quality_gate.py
+python scripts\quality_gate.py
+.\scripts\verify-apis.ps1
+docker exec cf-postgres-local psql -U postgres -d content_factory -c "select 1;"
+```
 
 ---
 
 ## 完整演示流程（验证步骤）
 
 1. http://localhost:5001 → 点 [运动内衣 · 黑] 模板 chip → [开始生成]
-2. 跳到进度页，2-3 分钟看 11 张图涨出来（每张 10-15 秒）
+2. 跳到进度页，2-3 分钟看 11 张候选涨出来（其中 4 张可作为重点审核演示）
 3. **新任务**视频区是空状态 + 配置表单：
    - 选首帧图（dropdown 或直接 hover 图卡点 [🎬]）
    - 改 prompt
    - 点 [🎬 提交生成视频成片]
-4. 等 90-180 秒（真调 Seedance）
+4. 等 90-180 秒（真调 Seedance image-to-video）
 5. 看真新视频出来 + 点 [🔊 旁白] 听神经声口播
 6. 浏览器开 http://localhost:5001/history 看历史卡片，点任意一张回看
 

@@ -614,9 +614,9 @@ VALUES (
     'image',
     'pending',
     'high',
-    'YN-BRA-001 首期图片打样：白底图 + 4 场景图',
-    8,
-    '{"resolution":"1024x1280","views":["front","back","detail"],"scenes":["yoga_studio","running_outdoor","gym","outdoor_street"],"model_image":"sd-xl-1.0","model_text":"gpt-4o"}'::jsonb,
+    'YN-BRA-001 首期图片打样：6 商品图 + 5 场景图',
+    11,
+    '{"resolution":"1024x1280","views":["front","side","back","fabric_detail","zipper_action","logo_detail"],"scenes":["yoga_studio","running_outdoor","gym","outdoor_street","beach"],"model_image":"sd-xl-1.0","model_text":"gpt-4o"}'::jsonb,
     'recXXXIMG001',
     '飞飞'
 ) ON CONFLICT (id) DO NOTHING;

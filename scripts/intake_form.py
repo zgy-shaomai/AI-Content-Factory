@@ -39,6 +39,7 @@ def _load_env_local():
     return out
 
 _env = _load_env_local()
+HOST = _env.get("INTAKE_HOST") or os.environ.get("INTAKE_HOST", "127.0.0.1")
 POSTGRES_DB = _env.get("POSTGRES_DB") or os.environ.get("POSTGRES_DB", "content_factory")
 POSTGRES_USER = _env.get("POSTGRES_USER") or os.environ.get("POSTGRES_USER", "postgres")
 N8N_BASE = (_env.get("N8N_BASE") or os.environ.get("N8N_BASE", "http://localhost:5678")).rstrip("/")
@@ -47,6 +48,12 @@ N8N_EDITOR_URL = (_env.get("N8N_EDITOR_URL") or os.environ.get("N8N_EDITOR_URL")
 ARK_API_KEY = _env.get("ARK_API_KEY") or os.environ.get("ARK_API_KEY", "")
 ARK_BASE = "https://ark.cn-beijing.volces.com/api/v3"
 SEEDANCE_MODEL = "doubao-seedance-1-0-pro-250528"
+MAX_FORM_BODY_BYTES = 64 * 1024
+MAX_JSON_BODY_BYTES = 32 * 1024
+ALLOWED_VIDEO_DURATIONS = {6, 12, 24}
+ALLOWED_VIDEO_RATIOS = {"9:16", "1:1", "16:9"}
+VIDEO_STATUS_TEXT = "已配置视频生成，可直接提交成片" if ARK_API_KEY else "未配置 ARK_API_KEY，视频提交会被后端明确拦截"
+VIDEO_STATUS_CLASS = "env-ready" if ARK_API_KEY else "env-warn"
 
 if not ARK_API_KEY:
     print("⚠️  ARK_API_KEY 未配置！视频生成功能不可用。")
@@ -66,6 +73,7 @@ body{
 }
 a{color:inherit;text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:0;background:none}
+button[disabled]{opacity:.65;cursor:not-allowed;transform:none!important;box-shadow:none!important}
 :root{
   --indigo:#6366f1;--indigo-dark:#4f46e5;--pink:#ec4899;
   --slate-50:#f8fafc;--slate-100:#f1f5f9;--slate-200:#e2e8f0;--slate-300:#cbd5e1;
@@ -108,6 +116,15 @@ button{font-family:inherit;cursor:pointer;border:0;background:none}
   background:linear-gradient(135deg,#a78bfa,#f472b6);
   color:#fff;font-size:12px;font-weight:600;
   display:flex;align-items:center;justify-content:center;
+}
+@media(max-width:640px){
+  .nav{
+    height:auto;padding:12px 16px;flex-direction:column;align-items:stretch;gap:10px;
+  }
+  .nav-left,.nav-right{
+    width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  }
+  .crumbs,.workspace{display:none}
 }
 
 /* ---------- buttons ---------- */
@@ -173,6 +190,17 @@ FORM_HTML = """<!DOCTYPE html><html lang="zh-CN"><head>
 .step.active .step-num{background:var(--indigo);color:#fff}
 .step.active{color:var(--slate-900);font-weight:500}
 .step-arr{color:var(--slate-300)}
+.flow-hint{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px;
+}
+.flow-card{
+  background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:14px 16px;
+  box-shadow:var(--shadow-sm);
+}
+.flow-kicker{font-size:11px;font-weight:600;color:var(--indigo);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.flow-title{font-size:14px;font-weight:600;color:var(--slate-900);margin-bottom:4px}
+.flow-desc{font-size:12px;color:var(--slate-500);line-height:1.6}
+@media(max-width:640px){.flow-hint{grid-template-columns:1fr}}
 
 .layout{display:grid;grid-template-columns:1fr 280px;gap:24px;margin-bottom:60px}
 @media(max-width:900px){.layout{grid-template-columns:1fr}}
@@ -209,6 +237,10 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
   border-radius:0 0 12px 12px;
 }
 .submit-meta{font-size:11px;color:var(--slate-500)}
+@media(max-width:640px){
+  .submit-bar{flex-direction:column;align-items:stretch;gap:12px}
+  .submit-bar .btn{width:100%;justify-content:center}
+}
 
 .aside{display:flex;flex-direction:column;gap:14px}
 .aside-card{
@@ -225,6 +257,12 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
   width:24px;height:24px;border-radius:6px;
   background:rgba(99,102,241,.1);color:var(--indigo);margin-bottom:8px;
 }
+.env-note{
+  margin-top:12px;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:500;
+  border:1px solid var(--slate-200);
+}
+.env-ready{background:rgba(16,185,129,.08);color:var(--green-dark);border-color:rgba(16,185,129,.18)}
+.env-warn{background:rgba(245,158,11,.1);color:#b45309;border-color:rgba(245,158,11,.22)}
 </style></head><body>
 
 <nav class="nav">
@@ -247,7 +285,7 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
 
 <header class="page-header">
   <div class="page-title">录入产品</div>
-  <div class="page-sub">填好下面字段，系统自动跑卖点拆解 → 11 张商品图 + 场景图，平均 2-3 分钟。</div>
+  <div class="page-sub">填好 SKU、卖点和场景后，系统会先生成 11 张候选，其中 4 张用于重点审核展示，平均 2-3 分钟。</div>
   <div class="steps">
     <div class="step active"><span class="step-num">1</span>录入</div>
     <span class="step-arr">→</span>
@@ -256,6 +294,23 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
     <div class="step"><span class="step-num">3</span>审核</div>
     <span class="step-arr">→</span>
     <div class="step"><span class="step-num">4</span>归档</div>
+  </div>
+  <div class="flow-hint">
+    <div class="flow-card">
+      <div class="flow-kicker">Step 1</div>
+      <div class="flow-title">录入产品要点</div>
+      <div class="flow-desc">填写 SKU、核心卖点、目标场景，系统会按同一模板生成本次任务。</div>
+    </div>
+    <div class="flow-card">
+      <div class="flow-kicker">Step 2</div>
+      <div class="flow-title">生成 11 张候选</div>
+      <div class="flow-desc">默认产出 6 张商品图和 5 张场景图，先看全量，再挑 4 张做重点审核展示。</div>
+    </div>
+    <div class="flow-card">
+      <div class="flow-kicker">Step 3</div>
+      <div class="flow-title">审核后转视频</div>
+      <div class="flow-desc">挑一张候选当首帧，继续走视频成片和归档，不需要重新录入同一 SKU。</div>
+    </div>
   </div>
 </header>
 
@@ -333,9 +388,9 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
   </div>
 
   <div class="submit-bar">
-    <div class="submit-meta">提交后跳转到生成进度页 · 全程可观察 N8N 流程</div>
-    <button type="submit" class="btn btn-primary">
-      开始生成
+    <div class="submit-meta">提交后会创建任务并跳转到进度页；如果 N8N 或数据库异常，页面会显示可定位的状态提示。</div>
+    <button type="submit" class="btn btn-primary" id="submitBtn">
+      <span id="submitBtnLabel">开始生成</span>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
     </button>
   </div>
@@ -345,11 +400,12 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
 
 <aside class="aside">
   <div class="aside-card">
-    <div class="aside-title">📊 单 SKU 产能</div>
-    <div class="metric"><span class="metric-label">候选数量</span><span class="metric-value">11 张</span></div>
-    <div class="metric"><span class="metric-label">耗时</span><span class="metric-value">~2.5 min</span></div>
-    <div class="metric"><span class="metric-label">单图成本</span><span class="metric-value">¥0.30</span></div>
-    <div class="metric"><span class="metric-label">总成本</span><span class="metric-value">¥3.30</span></div>
+    <div class="aside-title">📊 本次预计产出</div>
+    <div class="metric"><span class="metric-label">商品图</span><span class="metric-value">6 张</span></div>
+    <div class="metric"><span class="metric-label">场景图</span><span class="metric-value">5 张</span></div>
+    <div class="metric"><span class="metric-label">视频成片</span><span class="metric-value">1 条</span></div>
+    <div class="metric"><span class="metric-label">重点审核</span><span class="metric-value">4 张</span></div>
+    <div class="help">图片平均 2-3 分钟；视频单条约 90-180 秒，首帧从候选图直接选取。</div>
   </div>
 
   <div class="aside-card">
@@ -360,6 +416,7 @@ textarea{min-height:78px;resize:vertical;line-height:1.6}
       <strong style="color:var(--slate-900)">小技巧</strong><br>
       卖点写得越具体（如"前拉链穿脱"而不是"方便"），生成图越能突出特征。
     </div>
+    <div class="env-note {video_status_class}">{video_status_text}</div>
   </div>
 
   <div class="aside-card">
@@ -392,6 +449,21 @@ function applyTpl(k, btn){
   // 高亮选中
   document.querySelectorAll('.template-chips .chip').forEach(c=>c.classList.remove('active'));
   if(btn) btn.classList.add('active');
+}
+
+const formEl = document.getElementById('form');
+const submitBtn = document.getElementById('submitBtn');
+const submitBtnLabel = document.getElementById('submitBtnLabel');
+if(formEl && submitBtn && submitBtnLabel){
+  formEl.addEventListener('submit', e=>{
+    if(submitBtn.dataset.submitting === '1'){
+      e.preventDefault();
+      return;
+    }
+    submitBtn.dataset.submitting = '1';
+    submitBtn.disabled = true;
+    submitBtnLabel.textContent = '已提交，正在创建任务...';
+  });
 }
 </script>
 </body></html>"""
@@ -436,6 +508,20 @@ RESULT_HTML = """<!DOCTYPE html><html lang="zh-CN"><head>
 .stat{padding:10px 0}
 .stat-v{font-size:18px;font-weight:600;color:var(--slate-900);font-feature-settings:"tnum"}
 .stat-l{font-size:11px;color:var(--slate-400);text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+.poll-state{
+  margin-top:16px;padding:14px 16px;border-radius:12px;border:1px solid var(--slate-200);
+  background:#fff;display:flex;justify-content:space-between;gap:16px;align-items:flex-start;
+}
+.poll-copy{min-width:0}
+.poll-title{font-size:13px;font-weight:600;color:var(--slate-900);margin-bottom:3px}
+.poll-sub{font-size:12px;color:var(--slate-500);line-height:1.6}
+.poll-state.poll-ok{border-color:rgba(16,185,129,.18);background:rgba(16,185,129,.05)}
+.poll-state.poll-warn{border-color:rgba(245,158,11,.24);background:rgba(245,158,11,.08)}
+.poll-state.poll-error{border-color:rgba(239,68,68,.24);background:rgba(239,68,68,.08)}
+@media(max-width:640px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .poll-state{flex-direction:column}
+}
 
 /* story strip — 视觉化"图视频如何串起来" */
 .story-strip{
@@ -720,6 +806,11 @@ select.vc-btn option{background:#1e293b;color:#fff}
 .action-summary{font-size:13px;color:var(--slate-700)}
 .action-summary strong{color:var(--slate-900)}
 .action-buttons{display:flex;gap:8px}
+@media(max-width:640px){
+  .action-bar{padding:12px 16px;flex-direction:column;align-items:stretch;gap:10px}
+  .action-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .action-buttons .btn:last-child{grid-column:1/-1}
+}
 
 /* lightbox */
 .lightbox{
@@ -777,6 +868,7 @@ select.vc-btn option{background:#1e293b;color:#fff}
 .err-card{background:#fef2f2;border-left:4px solid var(--red);padding:18px 22px;border-radius:10px;margin-bottom:20px}
 .err-title{color:#991b1b;font-weight:600;font-size:14px;margin-bottom:4px}
 .err-msg{color:#b91c1c;font-size:13px}
+.err-help{margin-top:8px;font-size:12px;color:#7f1d1d;line-height:1.6}
 </style></head><body>
 
 <nav class="nav">
@@ -839,7 +931,7 @@ VIDEO_HAS = """
   <div class="video-header">
     <div>
       <div class="video-title">🎬 视频成片 · 由 <span class="link-img7" onclick="highlightSeven(event)">候选图 #7（瑜伽馆）</span> 动画化得到</div>
-      <div class="video-sub">同一模特、同一服装、同一场景 · 12 秒 · Seedance 2.0 image-to-video</div>
+      <div class="video-sub">同一模特、同一服装、同一场景 · 12 秒 · Seedance image-to-video</div>
     </div>
     <span class="pill-status pill-success"><span class="dot"></span>已就绪</span>
   </div>
@@ -874,7 +966,7 @@ VIDEO_EMPTY = """
   <div class="video-header">
     <div>
       <div class="video-title">🎬 视频成片</div>
-      <div class="video-sub">候选图审核通过后，挑任意一张作为视频首帧 · Seedance 2.0 image-to-video · 单条约 90-180 秒</div>
+      <div class="video-sub">候选图审核通过后，挑任意一张作为视频首帧 · Seedance image-to-video · 单条约 90-180 秒</div>
     </div>
     <span class="pill-status" style="background:var(--slate-100);color:var(--slate-500)"><span class="dot"></span>等待配置</span>
   </div>
@@ -929,7 +1021,7 @@ VIDEO_EMPTY = """
     <button class="btn btn-primary vc-submit" onclick="genVideoMock()" id="genVideoBtn">
       🎬 提交生成视频成片
     </button>
-    <div class="vc-cost">预计耗时 ~90 秒 · 成本约 ¥12（Seedance 1 元/秒）</div>
+    <div class="vc-cost">预计耗时 90-180 秒 · 按 Seedance 视频时长计费</div>
   </div>
 </div>
 """
@@ -953,6 +1045,13 @@ PROGRESS_BLOCK = """
     <div class="stat"><div class="stat-v" id="cost">¥0.00</div><div class="stat-l">已花费</div></div>
     <div class="stat"><div class="stat-v" id="eta">-</div><div class="stat-l">预计剩余</div></div>
   </div>
+  <div class="poll-state poll-ok" id="pollState">
+    <div class="poll-copy">
+      <div class="poll-title" id="pollStateTitle">正在连接生成服务...</div>
+      <div class="poll-sub" id="pollStateSub">页面会每 2 秒查询一次任务状态，并在异常时给出排查提示。</div>
+    </div>
+    <button type="button" class="btn btn-secondary" id="pollRetryBtn" onclick="retryPoll()" style="display:none">重新检查状态</button>
+  </div>
 </div>
 
 <!-- Story strip：让客户一眼看明白图视频是同一套素材联动 -->
@@ -971,8 +1070,8 @@ PROGRESS_BLOCK = """
   <div class="story-arr">→</div>
   <div class="story-step story-step-key">
     <div class="story-icon" style="background:linear-gradient(135deg,var(--indigo),var(--pink));color:#fff;box-shadow:0 4px 12px rgba(99,102,241,.4)">🎯</div>
-    <div class="story-label">选第 7 张当视频首帧</div>
-    <div class="story-desc"><a href="#slot-card-7" onclick="highlightSeven(event)">瑜伽馆场景 ↓</a></div>
+    <div class="story-label">4 张重点审核</div>
+    <div class="story-desc">确认风格后，再从候选里选首帧做视频</div>
   </div>
   <div class="story-arr">→</div>
   <div class="story-step">
@@ -1007,6 +1106,11 @@ const $ = id => document.getElementById(id);
 const grid = $('img-grid'), countEl = $('count'), barEl = $('bar');
 const elapsedEl = $('elapsed'), rateEl = $('rate'), costEl = $('cost'), etaEl = $('eta');
 const statusPill = $('statusPill'), statusText = $('statusText'), actionBar = $('actionBar');
+const pollState = $('pollState'), pollStateTitle = $('pollStateTitle');
+const pollStateSub = $('pollStateSub'), pollRetryBtn = $('pollRetryBtn');
+let consecutivePollErrors = 0;
+let pollFinished = false;
+let pollTimer = null;
 
 // 初始 11 个 placeholder
 function renderPlaceholders(){
@@ -1101,10 +1205,30 @@ function rerender(){
   const filtered=allCands.filter(c=>curTab==='all'||classify(c)===curTab);
   if(filtered.length===0){
     if(allCands.length===0){renderPlaceholders();return;}
-    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--slate-400);font-size:13px">该分类下暂无候选</div>';
+    grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--slate-400);font-size:13px">该分类下暂无候选，先回到“全部”查看，或继续等待更多候选生成。</div>';
     return;
   }
   grid.innerHTML=filtered.map((c,i)=>imgCardHTML(c,allCands.indexOf(c))).join('');
+}
+
+function setPollState(kind, title, sub, showRetry){
+  pollState.className = `poll-state ${kind}`;
+  pollStateTitle.textContent = title;
+  pollStateSub.textContent = sub;
+  pollRetryBtn.style.display = showRetry ? 'inline-flex' : 'none';
+}
+
+function retryPoll(){
+  if(pollFinished){
+    pollFinished = false;
+  }
+  if(pollTimer){
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  consecutivePollErrors = 0;
+  setPollState('poll-ok', '正在重新检查状态...', '会继续轮询任务和候选回写状态。', false);
+  poll();
 }
 
 let approvals={approve:0,reject:0,marked:{}};  // marked: idx → 'approve'/'reject'
@@ -1266,7 +1390,7 @@ async function genVideoMock(){
     <div class="video-header">
       <div>
         <div class="video-title">🎬 视频成片 · 生成中</div>
-        <div class="video-sub">用候选图 #${seq} 作为首帧 · ${duration}s · ${ratio} · Seedance 2.0</div>
+        <div class="video-sub">用候选图 #${seq} 作为首帧 · ${duration}s · ${ratio} · Seedance image-to-video</div>
       </div>
       <span class="pill-status pill-running"><span class="dot"></span>生成中</span>
     </div>
@@ -1362,7 +1486,7 @@ function showVideoFromReal(videoUrl, seq, prompt, duration, ratio){
     <div class="video-header">
       <div>
         <div class="video-title">🎬 视频成片 · 由 <span class="link-img7" onclick="pickAsKeyframe(${seq},event)">候选图 #${seq}</span> 动画化得到</div>
-        <div class="video-sub">${duration} 秒 · ${ratio} · Seedance 2.0 image-to-video · 刚刚生成</div>
+        <div class="video-sub">${duration} 秒 · ${ratio} · Seedance image-to-video · 刚刚生成</div>
       </div>
       <span class="pill-status pill-success"><span class="dot"></span>刚刚完成</span>
     </div>
@@ -1420,11 +1544,19 @@ document.addEventListener('DOMContentLoaded',()=>{
 });
 
 async function poll(){
+  if(pollFinished)return;
   try{
     const res=await fetch(`/api/status?task_id=${TASK_ID}`);
+    if(!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
     const data=await res.json();
+    if(data.error){
+      throw new Error(data.error);
+    }
+    consecutivePollErrors = 0;
     allCands=data.candidates||[];
-    const status=data.status||'running';
+    const status=data.status||'pending';
 
     const n=allCands.length;
     countEl.textContent=n;
@@ -1442,22 +1574,49 @@ async function poll(){
       etaEl.textContent=remaining<60?Math.round(remaining)+'s':Math.round(remaining/60)+'m'+Math.round(remaining%60)+'s';
     } else if(n===11){etaEl.textContent='✓ 完成'}
 
+    if(n===0 && elapsedSec >= 60 && status !== 'failed'){
+      setPollState('poll-warn', '超过 60 秒仍未返回候选', '请检查 N8N 最近执行、数据库连接和外部 API 凭据。', true);
+    } else if(n===0){
+      setPollState('poll-ok', '生成服务已连接，等待第一张候选', '任务已创建后，首批候选通常会在 10-30 秒内开始回写。', false);
+    } else if(n < 11){
+      setPollState('poll-ok', '候选持续回写中', `当前已回写 ${n}/11 张；页面会继续自动刷新。`, false);
+    } else {
+      setPollState('poll-ok', '候选已全部回写', '可以继续重点审核，或直接从候选中挑一张转视频。', false);
+    }
+
     if(status==='succeeded'){
       statusPill.classList.replace('pill-running','pill-success');
       statusText.textContent='生成完成';
       actionBar.classList.add('visible');
       $('actionBar').querySelector('.action-summary').innerHTML=
         `<strong>${n} 张候选</strong>已生成 · 总耗时 ${Math.round(elapsedSec)}s · 总花费 ¥${(n*0.30).toFixed(2)}`;
+      setPollState('poll-ok', '任务已完成', '候选回写已经结束，可以开始审核或继续生成视频。', false);
+      pollFinished = true;
     } else if(status==='failed'){
       statusPill.classList.replace('pill-running','pill-failed');
       statusText.textContent='失败';
+      setPollState('poll-error', '任务执行失败', '请打开 N8N 画布查看失败节点；修复后可重新触发本任务。', true);
+      pollFinished = true;
+    } else if(status==='pending'){
+      statusText.textContent='等待执行';
+    } else {
+      statusText.textContent='正在生成';
     }
 
     rerender();
 
     if(status==='succeeded'||status==='failed')return;
-  }catch(e){console.error(e)}
-  setTimeout(poll,2000);
+  }catch(e){
+    consecutivePollErrors += 1;
+    const severe = consecutivePollErrors >= 3;
+    setPollState(
+      severe ? 'poll-error' : 'poll-warn',
+      severe ? '生成服务连接异常' : '状态查询暂时波动',
+      `${e.message || e}。${severe ? '请检查 N8N、数据库或容器状态。' : '系统会自动继续重试。'}`,
+      severe,
+    );
+  }
+  pollTimer = setTimeout(poll,2000);
 }
 
 setInterval(()=>{
@@ -1493,6 +1652,8 @@ def _run_psql(sql, vars=None):
     r = subprocess.run(args, input=sql, capture_output=True, text=True, encoding="utf-8")
     stdout = (r.stdout or "").strip()
     stderr = (r.stderr or "").strip()
+    if r.returncode != 0 and not stderr:
+        stderr = f"psql exited with code {r.returncode}"
     return stdout, stderr
 
 
@@ -1531,6 +1692,25 @@ def safe_http_url(value):
     except Exception:
         pass
     return ""
+
+
+def read_request_body(handler, max_bytes, body_name):
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError as exc:
+        raise ValueError("Content-Length 非法") from exc
+    if length <= 0:
+        raise ValueError(f"{body_name} 不能为空")
+    if length > max_bytes:
+        raise ValueError(f"{body_name} 过大，超过 {max_bytes // 1024} KB")
+    return handler.rfile.read(length)
+
+
+def parse_int_field(value, field_name):
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} 必须是整数") from exc
 
 
 def upsert_product_and_task(form):
@@ -1634,6 +1814,8 @@ def get_candidate_url(task_id, seq):
 
 def seedance_submit(image_url, text_prompt, duration=12, ratio="9:16"):
     """给 Seedance 投递 image-to-video 任务，返回 task_id"""
+    if not ARK_API_KEY:
+        return None, "视频功能未配置 ARK_API_KEY"
     full_prompt = f"{text_prompt} --resolution 720p --ratio {ratio} --duration {int(duration)} --fps 24 --watermark false"
     body = {
         "model": SEEDANCE_MODEL,
@@ -1700,21 +1882,25 @@ def seedance_poll(seedance_task_id):
 
 def get_status(task_id):
     task_id = validate_uuid(task_id, "task_id")
-    rows, _ = pg_rows_vars(
+    rows, rows_err = pg_rows_vars(
         "SELECT id::text, oss_url, COALESCE(parameters_snapshot->>'shot_type','') AS shot, sequence_no "
         "FROM content_factory.candidates WHERE task_id = :'task_id'::uuid ORDER BY sequence_no;",
         {"task_id": task_id}
     )
+    if rows_err:
+        return {"status": "error", "error": f"数据库读取候选失败: {rows_err[:200]}"}
     cands = []
     for ln in rows:
         parts = ln.split("\t")
         if len(parts) >= 3:
             cands.append({"id":parts[0].strip()[:8],"url":parts[1].strip(),"shot":parts[2].strip()})
-    run_status, _ = pg_vars(
+    run_status, run_err = pg_vars(
         "SELECT status FROM content_factory.generation_runs WHERE task_id = :'task_id'::uuid ORDER BY started_at DESC LIMIT 1;",
         {"task_id": task_id}
     )
-    return {"status": run_status or "running", "candidates": cands}
+    if run_err:
+        return {"status": "error", "error": f"数据库读取任务状态失败: {run_err[:200]}"}
+    return {"status": run_status or "pending", "candidates": cands}
 
 
 # ============================================================================
@@ -1724,14 +1910,16 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ct="text/html; charset=utf-8"):
         self.send_response(code)
         self.send_header("Content-Type", ct)
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body.encode("utf-8") if isinstance(body, str) else body)
 
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
-            self._send(200, FORM_HTML.replace("{n8n_editor_url}", N8N_EDITOR_URL))
+            html = FORM_HTML.replace("{n8n_editor_url}", N8N_EDITOR_URL) \
+                            .replace("{video_status_text}", VIDEO_STATUS_TEXT) \
+                            .replace("{video_status_class}", VIDEO_STATUS_CLASS)
+            self._send(200, html)
         elif path == "/result":
             qs = urllib.parse.urlparse(self.path).query
             tid = (urllib.parse.parse_qs(qs).get("task_id") or [""])[0]
@@ -1758,12 +1946,35 @@ class Handler(BaseHTTPRequestHandler):
                 data = get_status(tid) if tid else {"error":"missing task_id"}
             except ValueError as e:
                 data = {"error": str(e)}
-            self._send(200, json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8")
+            status_code = 200 if "error" not in data else 503
+            if data.get("error") == "missing task_id" or "UUID" in data.get("error", ""):
+                status_code = 400
+            self._send(status_code, json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8")
         elif path == "/api/gen-video-status":
             qs = urllib.parse.urlparse(self.path).query
             sid = (urllib.parse.parse_qs(qs).get("id") or [""])[0]
             data = seedance_poll(sid) if sid else {"error":"missing id"}
-            self._send(200, json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8")
+            status_code = 200
+            if data.get("status") == "error" or ("error" in data and data.get("status") != "failed"):
+                status_code = 503
+            if data.get("error") == "missing id":
+                status_code = 400
+            self._send(status_code, json.dumps(data, ensure_ascii=False), "application/json; charset=utf-8")
+        elif path == "/health":
+            db_ok = False
+            db_err = ""
+            _, db_err = pg_vars("SELECT 1;")
+            db_ok = not db_err
+            health = {
+                "status": "ok" if db_ok else "degraded",
+                "host": HOST,
+                "port": PORT,
+                "postgres_ok": db_ok,
+                "postgres_error": db_err[:160],
+                "ark_configured": bool(ARK_API_KEY),
+                "n8n_trigger": N8N_TRIGGER,
+            }
+            self._send(200 if db_ok else 503, json.dumps(health, ensure_ascii=False), "application/json; charset=utf-8")
         elif path.startswith("/video/") or path.startswith("/audio/"):
             is_audio = path.startswith("/audio/")
             fname = path[len("/audio/" if is_audio else "/video/"):]
@@ -1913,16 +2124,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/api/gen-video":
-            length = int(self.headers.get("Content-Length", 0))
             try:
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                raw = read_request_body(self, MAX_JSON_BODY_BYTES, "JSON 请求体")
+                payload = json.loads(raw.decode("utf-8"))
+            except ValueError as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False), "application/json; charset=utf-8"); return
             except Exception:
                 self._send(400, json.dumps({"error":"bad json"}), "application/json"); return
             tid = payload.get("task_id", "")
-            seq = int(payload.get("seq") or 7)
             prompt = payload.get("prompt") or ""
-            duration = int(payload.get("duration") or 12)
             ratio = payload.get("ratio") or "9:16"
+            try:
+                seq = parse_int_field(payload.get("seq") or 7, "seq")
+                duration = parse_int_field(payload.get("duration") or 12, "duration")
+            except ValueError as e:
+                self._send(400, json.dumps({"error": str(e)}, ensure_ascii=False), "application/json; charset=utf-8"); return
+            if duration not in ALLOWED_VIDEO_DURATIONS:
+                self._send(400, json.dumps({"error":"duration 仅支持 6 / 12 / 24 秒"}, ensure_ascii=False), "application/json; charset=utf-8"); return
+            if ratio not in ALLOWED_VIDEO_RATIOS:
+                self._send(400, json.dumps({"error":"ratio 仅支持 9:16 / 1:1 / 16:9"}, ensure_ascii=False), "application/json; charset=utf-8"); return
+            if not ARK_API_KEY:
+                self._send(400, json.dumps({"error":"视频功能未配置 ARK_API_KEY"}, ensure_ascii=False), "application/json; charset=utf-8"); return
             try:
                 img_url = get_candidate_url(tid, seq)
             except ValueError as e:
@@ -1931,6 +2153,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, json.dumps({"error":f"候选 #{seq} 未找到，可能还没生成"}), "application/json"); return
             if not prompt.strip():
                 self._send(400, json.dumps({"error":"prompt 不能为空"}), "application/json"); return
+            if len(prompt) > 2000:
+                self._send(400, json.dumps({"error":"prompt 过长，最多 2000 字符"}), "application/json"); return
             sd_tid, err = seedance_submit(img_url, prompt, duration=duration, ratio=ratio)
             if err:
                 self._send(500, json.dumps({"error":err}), "application/json"); return
@@ -1939,8 +2163,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path != "/submit":
             self._send(404, "not found"); return
-        length = int(self.headers.get("Content-Length", 0))
-        raw_bytes = self.rfile.read(length)
+        try:
+            raw_bytes = read_request_body(self, MAX_FORM_BODY_BYTES, "表单请求体")
+        except ValueError as e:
+            self._send(400, str(e)); return
 
         def _safe_decode(b):
             for enc in ("utf-8", "gbk"):
@@ -1971,7 +2197,7 @@ class Handler(BaseHTTPRequestHandler):
                               .replace("{task_id_short}", tid[:8]) \
                               .replace("{task_id}", tid) \
                               .replace("{n8n_editor_url}", N8N_EDITOR_URL) \
-                              .replace("{error_block}", f'<div class="err-card"><div class="err-title">N8N 触发失败</div><div class="err-msg">HTTP {code} - {h(body[:200])}</div></div>') \
+                              .replace("{error_block}", f'<div class="err-card"><div class="err-title">N8N 触发失败</div><div class="err-msg">HTTP {code} - {h(body[:200])}</div><div class="err-help">任务已经创建，后续可通过该 task_id 重新检查状态，或在 N8N 画布中手动重试 webhook。</div></div>') \
                               .replace("{progress_block}", "") \
                               .replace("{poll_script}", "")
             self._send(500, html); return
@@ -1985,5 +2211,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"=== ContentFactory v3 · http://localhost:{PORT} ===")
-    HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    print(f"=== ContentFactory v3 · http://{HOST}:{PORT} ===")
+    HTTPServer((HOST, PORT), Handler).serve_forever()

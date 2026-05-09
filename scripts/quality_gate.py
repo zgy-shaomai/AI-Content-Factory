@@ -7,6 +7,7 @@ not rely on hidden demo shortcuts. This is intentionally dependency-free.
 from __future__ import annotations
 
 import json
+import py_compile
 import re
 import sys
 from pathlib import Path
@@ -138,6 +139,43 @@ def check_smoke_script(errors: list[str]) -> None:
         fail(errors, "schemas/smoke-test.sh must export CONTAINER_NAME and ROOT_DIR")
 
 
+def check_python_scripts(errors: list[str]) -> None:
+    for rel in ("scripts/intake_form.py", "scripts/n8n_setup.py", "scripts/quality_gate.py"):
+        path = ROOT / rel
+        try:
+            py_compile.compile(str(path), doraise=True)
+        except py_compile.PyCompileError as exc:
+            fail(errors, f"{path}: py_compile failed: {exc.msg}")
+
+
+def check_local_demo_contract(errors: list[str]) -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8", errors="ignore")
+    setup = (ROOT / "SETUP.md").read_text(encoding="utf-8", errors="ignore")
+    intake = (ROOT / "scripts" / "intake_form.py").read_text(encoding="utf-8", errors="ignore")
+    env_example = (ROOT / "deploy" / ".env.local.example").read_text(encoding="utf-8", errors="ignore")
+
+    if '"task_id": "task-yn-bra-001-image-001"' in readme:
+        fail(errors, "README.md demo webhook still uses non-UUID task_id")
+    if '"task_id": "55555555-5555-5555-5555-555555555501"' not in readme:
+        fail(errors, "README.md demo webhook must point to the seeded UUID task")
+    if "深色 hero" in setup:
+        fail(errors, "SETUP.md still describes an outdated dark hero UI")
+    if "python scripts\\quality_gate.py" not in setup and "python scripts/quality_gate.py" not in setup:
+        fail(errors, "SETUP.md must include quality_gate.py in the preflight checklist")
+    if "0.0.0.0" in intake:
+        fail(errors, "scripts/intake_form.py must not bind the demo server to 0.0.0.0 by default")
+    for required in (
+        "已提交，正在创建任务...",
+        "retryPoll()",
+        'HTTPServer((HOST, PORT), Handler).serve_forever()',
+    ):
+        if required not in intake:
+            fail(errors, f"scripts/intake_form.py missing demo safeguard marker: {required}")
+    for required_key in ("POSTGRES_PASSWORD=", "N8N_ENCRYPTION_KEY=", "REDIS_PASSWORD="):
+        if required_key not in env_example:
+            fail(errors, f"deploy/.env.local.example missing required key: {required_key}")
+
+
 def main() -> int:
     errors: list[str] = []
     for path in sorted(WORKFLOW_DIR.glob("*.json")):
@@ -145,6 +183,8 @@ def main() -> int:
     check_compose(errors)
     check_docs(errors)
     check_smoke_script(errors)
+    check_python_scripts(errors)
+    check_local_demo_contract(errors)
 
     if errors:
         print("QUALITY GATE FAILED")
@@ -157,4 +197,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -67,10 +67,8 @@ if not PG_PASSWORD:
 
 missing_api_keys = [name for name, value in {"ARK_API_KEY": ARK_API_KEY, "NEWAPI_KEY": NEWAPI_KEY}.items() if not value]
 if missing_api_keys:
-    print(f"⚠️  未配置 {', '.join(missing_api_keys)}：将使用 placeholder credential。")
-    print("   workflow 可以先导入；对应外部 API 调用会失败，填 key 后重跑本脚本即可。")
-    ARK_API_KEY = ARK_API_KEY or "placeholder"
-    NEWAPI_KEY = NEWAPI_KEY or "placeholder"
+    print(f"⚠️  未配置 {', '.join(missing_api_keys)}：会为缺失 key 的新 credential 使用 placeholder。")
+    print("   已存在的真实 credential 不会被 placeholder 覆盖；填 key 后重跑本脚本即可。")
 
 
 def req(method, path, body=None):
@@ -122,25 +120,41 @@ CREDS = [
             "password": PG_PASSWORD, "port": 5432,
             "allowUnauthorizedCerts": False, "ssl": "disable", "sshTunnel": False,
         },
+        "secret_required": False,
     },
     {"name": "cred-5dock-newapi", "type": "httpHeaderAuth",
-     "data": {"name": "Authorization", "value": f"Bearer {NEWAPI_KEY}"}},
+     "data": {"name": "Authorization", "value": f"Bearer {NEWAPI_KEY or 'placeholder'}"},
+     "secret_required": True,
+     "secret_present": bool(NEWAPI_KEY),
+     "secret_name": "NEWAPI_KEY"},
     {"name": "cred-volcengine-ark", "type": "httpHeaderAuth",
-     "data": {"name": "Authorization", "value": f"Bearer {ARK_API_KEY}"}},
+     "data": {"name": "Authorization", "value": f"Bearer {ARK_API_KEY or 'placeholder'}"},
+     "secret_required": True,
+     "secret_present": bool(ARK_API_KEY),
+     "secret_name": "ARK_API_KEY"},
     {"name": "cred-volcengine-asr", "type": "httpHeaderAuth",
-     "data": {"name": "Authorization", "value": "Bearer placeholder"}},
+     "data": {"name": "Authorization", "value": "Bearer placeholder"},
+     "secret_required": False},
     {"name": "cred-aliyun-oss-signer", "type": "httpHeaderAuth",
-     "data": {"name": "Authorization", "value": "Bearer placeholder"}},
+     "data": {"name": "Authorization", "value": "Bearer placeholder"},
+     "secret_required": False},
     {"name": "cred-feishu-tenant-token", "type": "httpHeaderAuth",
-     "data": {"name": "Authorization", "value": "Bearer placeholder"}},
+     "data": {"name": "Authorization", "value": "Bearer placeholder"},
+     "secret_required": False},
 ]
 
 existing_cred_ids = get_existing_credentials()
 cred_id_by_name = dict(existing_cred_ids)
 for c in CREDS:
+    payload = {"name": c["name"], "type": c["type"], "data": c["data"]}
     existing_id = existing_cred_ids.get(c["name"])
+    missing_secret = c.get("secret_required") and not c.get("secret_present")
     if existing_id:
-        patch_code, patch_body = req("PATCH", f"/credentials/{existing_id}", c)
+        if missing_secret:
+            cred_id_by_name[c["name"]] = existing_id
+            print(f"  SKIP update {c['name']} -> {existing_id} ({c['secret_name']} 未配置，保留现有 credential)")
+            continue
+        patch_code, patch_body = req("PATCH", f"/credentials/{existing_id}", payload)
         if patch_code not in (200, 201):
             print(f"  FAIL update {c['name']} id={existing_id} code={patch_code} body={str(patch_body)[:200]}")
             sys.exit(1)
@@ -148,7 +162,7 @@ for c in CREDS:
         print(f"  OK update {c['name']} -> {existing_id}")
         continue
 
-    code, body = req("POST", "/credentials", c)
+    code, body = req("POST", "/credentials", payload)
     if code in (200, 201):
         cred_id_by_name[c["name"]] = body["id"]
         print(f"  OK create {c['name']} -> {body['id']}")
@@ -157,7 +171,7 @@ for c in CREDS:
         if not existing_id:
             print(f"  FAIL {c['name']} 已存在，但脚本没拿到它的 id，无法绑定到 workflow")
             sys.exit(1)
-        patch_code, patch_body = req("PATCH", f"/credentials/{existing_id}", c)
+        patch_code, patch_body = req("PATCH", f"/credentials/{existing_id}", payload)
         if patch_code not in (200, 201):
             print(f"  FAIL update {c['name']} id={existing_id} code={patch_code} body={str(patch_body)[:200]}")
             sys.exit(1)
