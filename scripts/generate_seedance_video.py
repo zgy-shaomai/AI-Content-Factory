@@ -23,11 +23,12 @@ import time
 import urllib.request
 import urllib.error
 
-API_KEY = os.environ.get("ARK_API_KEY", "")
+API_KEY = os.environ.get("VIDEO_API_KEY") or os.environ.get("MEDIA_API_KEY") or os.environ.get("ARK_API_KEY", "")
 if not API_KEY:
-    print("❌ ARK_API_KEY 未设置。export ARK_API_KEY=ark-... 后重试"); sys.exit(1)
-TASK_URL = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
-MODEL = "doubao-seedance-1-0-pro-250528"
+    print("❌ VIDEO_API_KEY/MEDIA_API_KEY/ARK_API_KEY 未设置。配置后重试"); sys.exit(1)
+API_BASE = (os.environ.get("VIDEO_BASE_URL") or os.environ.get("MEDIA_BASE_URL") or os.environ.get("ARK_ENDPOINT") or "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
+TASK_URL = f"{API_BASE}/contents/generations/tasks"
+MODEL = os.environ.get("VIDEO_MODEL") or os.environ.get("ARK_VIDEO_MODEL") or "doubao-seedance-1-0-pro-250528"
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT_PATH = os.path.join(os.path.dirname(_SCRIPT_DIR), "_demo_seed", "videos", "yn-bra-001-12s.mp4")
@@ -65,7 +66,7 @@ def submit_task(prompt: str, image_url: str | None = None) -> str:
     """POST task. Return task id. If image_url provided, runs image-to-video."""
     content = [{"type": "text", "text": prompt}]
     if image_url:
-        content.append({"type": "image_url", "image_url": {"url": image_url}})
+        content.append({"type": "image_url", "image_url": {"url": image_url}, "role": "first_frame"})
     body = {"model": MODEL, "content": content}
     mode = "image-to-video" if image_url else "text-to-video"
     print(f"[submit] POST {TASK_URL} ({mode})", flush=True)

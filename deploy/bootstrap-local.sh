@@ -41,8 +41,11 @@ done
 [[ $MISSING -eq 1 ]] && exit 1
 
 # 软警告：API key 没填仍可起栈，但 N8N workflow 跑不通
-for v in ARK_API_KEY NEWAPI_KEY; do
+for v in LLM_API_KEY IMAGE_API_KEY VIDEO_API_KEY; do
     val="${!v:-}"
+    [[ -z "$val" && "$v" == "LLM_API_KEY" ]] && val="${NEWAPI_KEY:-}"
+    [[ -z "$val" && "$v" == "IMAGE_API_KEY" ]] && val="${MEDIA_API_KEY:-${ARK_API_KEY:-}}"
+    [[ -z "$val" && "$v" == "VIDEO_API_KEY" ]] && val="${MEDIA_API_KEY:-${ARK_API_KEY:-}}"
     if [[ -z "$val" || "$val" == CHANGE_ME* ]]; then
         echo "${YLW}  ⚠ $v 没填 → 栈能起，但 workflow 调用会 401。等拿到 key 后填进去，重启: docker restart cf-n8n-local${NC}"
     fi

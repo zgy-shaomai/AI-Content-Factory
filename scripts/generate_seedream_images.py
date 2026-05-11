@@ -11,38 +11,51 @@ import time
 import urllib.request
 import urllib.error
 
-API_KEY = os.environ.get("ARK_API_KEY", "")
+API_KEY = os.environ.get("IMAGE_API_KEY") or os.environ.get("MEDIA_API_KEY") or os.environ.get("ARK_API_KEY", "")
 if not API_KEY:
-    print("❌ ARK_API_KEY 未设置。export ARK_API_KEY=ark-... 后重试"); sys.exit(1)
-API_URL = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
-MODEL = "doubao-seedream-4-0-250828"
+    print("❌ IMAGE_API_KEY/MEDIA_API_KEY/ARK_API_KEY 未设置。配置后重试"); sys.exit(1)
+API_BASE = (os.environ.get("IMAGE_BASE_URL") or os.environ.get("MEDIA_BASE_URL") or os.environ.get("ARK_ENDPOINT") or "https://ark.cn-beijing.volces.com/api/v3").rstrip("/")
+API_URL = f"{API_BASE}/images/generations"
+MODEL = os.environ.get("IMAGE_MODEL") or os.environ.get("ARK_IMAGE_MODEL") or "doubao-seedream-4-0-250828"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "_demo_seed", "images")
+NEGATIVE_PROMPT = (
+    "third-party brand logo, unauthorized trademark, unauthorized wordmark, Nike, Nike Swoosh, "
+    "Li-Ning, 李宁, adidas, three stripes, Puma, Under Armour, Lululemon, Anta, Jordan, "
+    "random letters, random numbers, slogan text, hangtag text, watermark, text overlay, "
+    "wrong garment color, distorted garment construction, deformed body, bad anatomy"
+)
 
 os.makedirs(OUT_DIR, exist_ok=True)
 
 PROMPTS = [
-    ("01-studio-front", "studio shot of a 28-year-old asian woman wearing matte black sports bra with chrome front zipper on minimalist light gray background, frontal view, eye level, soft diffused natural light from camera left, breathable mesh fabric texture visible at sides, sweat-wicking nylon-spandex blend with subtle matte sheen, preserve original tonal logo placement on left chest 6cm below collarbone 3cm wide, neutral undertone, no color shift to navy blue or warm brown, professional fashion photography, ultra detailed, 1024x1024"),
-    ("02-studio-side", "studio profile shot of same 28-year-old asian woman wearing matte black sports bra with front zipper, side view facing camera-right, minimalist light gray seamless background, soft natural light from front-left at 45 degrees, breathable mesh side panels visible, high elasticity fabric showing natural drape, sweat-wicking nylon-spandex blend, brand color matte black with neutral undertone, professional fashion editorial style, sharp focus on fabric texture, 1024x1024"),
+    ("01-studio-front", "studio shot of a 28-year-old asian woman wearing matte black sports bra with chrome front zipper on minimalist light gray background, frontal view, eye level, soft diffused natural light from camera left, breathable mesh fabric texture visible at sides, sweat-wicking nylon-spandex blend with subtle matte sheen, plain unbranded chest panel with no visible logo, no text label, no slogan, neutral undertone, no color shift to navy blue or warm brown, professional fashion photography, ultra detailed, 1024x1024"),
+    ("02-studio-side", "studio profile shot of same 28-year-old asian woman wearing matte black sports bra with front zipper, side view facing camera-right, minimalist light gray seamless background, soft natural light from front-left at 45 degrees, breathable mesh side panels visible, high elasticity fabric showing natural drape, sweat-wicking nylon-spandex blend, product color matte black with neutral undertone, plain unbranded apparel, professional fashion editorial style, sharp focus on fabric texture, 1024x1024"),
     ("03-studio-back", "studio back shot of same 28-year-old asian woman wearing matte black sports bra, viewed from behind, minimalist light gray background, even soft lighting, racerback design clearly visible, breathable mesh fabric across upper back, high-elasticity strap support visible, no logo on back, matte black brand color, ultra detailed editorial photography, 1024x1024"),
     ("04-fabric-macro", "extreme close-up macro photograph of breathable mesh fabric surface on a matte black sports bra, sweat-wicking nylon-spandex blend showing fine weave pattern, subtle matte sheen, fiber detail at 1:1 magnification, soft directional lighting from upper-left to reveal texture depth, neutral undertone, professional product photography, no model, white seamless background blur, 1024x1024"),
-    ("05-zipper-action", "cinematic close-up of asian woman's hand pulling chrome front zipper of matte black sports bra, fingers gripping zipper pull with subtle motion blur on the pull, natural skin tone, soft directional light from window left, breathable mesh fabric texture visible around zipper area, preserve logo placement on left chest just below frame, lifestyle editorial style, shallow depth of field, 1024x1024"),
-    ("06-logo-closeup", "extreme close-up of branded logo on matte black sports bra fabric on left chest area, tonal embroidery or heat-transfer print, breathable mesh fabric texture surrounding logo, sweat-wicking nylon-spandex blend, soft natural lighting from top-left to highlight logo subtle dimensionality, no human face in frame, neutral matte black color with no color shift, professional product detail photography, 1024x1024"),
-    ("07-yoga-studio", "wide lifestyle shot of same 28-year-old asian woman in matte black sports bra and matching black yoga pants doing warrior pose in a sun-drenched yoga studio at golden morning hour, wooden floor, large arched window with soft warm sunlight streaming in, minimalist scandinavian decor, plants in background, breathable mesh fabric visible, professional photography in editorial fashion style, ultra detailed, 1024x1024"),
-    ("08-gym-training", "dynamic action shot of same asian woman wearing matte black sports bra performing battle rope exercises in modern minimalist gym with concrete floors, controlled motion blur on the ropes, focused expression, sweat sheen on skin showing effort, dramatic side lighting from large industrial windows, breathable mesh fabric and matte sheen visible, sweat-wicking performance shown, editorial sports photography, 1024x1024"),
-    ("09-park-running", "lifestyle shot of same asian woman jogging through a green urban park at golden hour, wearing matte black sports bra and running shorts, motion blur in legs and trees, focused forward gaze, warm late afternoon sunlight casting long shadows, breathable mesh fabric visible, sweat-wicking performance demonstrated, athletic editorial style with cinematic color grading, 1024x1024"),
-    ("10-mountain-outdoor", "cinematic outdoor shot of same asian woman in matte black sports bra and hiking shorts standing on a rocky mountain ridge with sweeping vista in background, dramatic golden hour lighting, slight wind in hair, confident pose looking toward distant peaks, breathable mesh fabric subtly visible, lifestyle adventure photography editorial, ultra detailed, 1024x1024"),
-    ("11-beach-coast", "coastal lifestyle shot of same asian woman in matte black sports bra walking along wet sand at sunset, ocean waves and distant horizon, warm orange-pink sky, footprints in sand behind her, soft sea breeze in hair, breathable mesh fabric visible, peaceful confident expression, fashion editorial photography, ultra detailed, 1024x1024"),
+    ("05-zipper-action", "cinematic close-up of asian woman's hand pulling chrome front zipper of matte black sports bra, fingers gripping zipper pull with subtle motion blur on the pull, natural skin tone, soft directional light from window left, breathable mesh fabric texture visible around zipper area, plain unbranded chest panel just below frame with no visible logo or text label, lifestyle editorial style, shallow depth of field, 1024x1024"),
+    ("06-chest-panel-detail", "extreme close-up of plain unbranded matte black sports bra fabric on left chest panel, no visible logo, no text label, no slogan, no badge, no hangtag text, breathable mesh fabric texture and seamless knit structure, sweat-wicking nylon-spandex blend, soft natural lighting from top-left to highlight subtle fabric dimensionality, no human face in frame, neutral matte black color with no color shift, professional product detail photography, 1024x1024"),
+    ("07-yoga-studio", "wide lifestyle shot of same 28-year-old asian woman in matte black sports bra and matching black yoga pants doing warrior pose in a sun-drenched yoga studio at golden morning hour, wooden floor, large arched window with soft warm sunlight streaming in, minimalist scandinavian decor, plants in background, breathable mesh fabric visible, professional photography in editorial fashion style, 9:16 vertical composition, full body with safe margins, ultra detailed, 720x1280"),
+    ("08-gym-training", "dynamic action shot of same asian woman wearing matte black sports bra performing battle rope exercises in modern minimalist gym with concrete floors, controlled motion blur on the ropes, focused expression, sweat sheen on skin showing effort, dramatic side lighting from large industrial windows, breathable mesh fabric and matte sheen visible, sweat-wicking performance shown, editorial sports photography, 9:16 vertical composition, full body with safe margins, 720x1280"),
+    ("09-park-running", "lifestyle shot of same asian woman jogging through a green urban park at golden hour, wearing matte black sports bra and running shorts, motion blur in legs and trees, focused forward gaze, warm late afternoon sunlight casting long shadows, breathable mesh fabric visible, sweat-wicking performance demonstrated, athletic editorial style with cinematic color grading, 9:16 vertical composition, full body with safe margins, 720x1280"),
+    ("10-mountain-outdoor", "cinematic outdoor shot of same asian woman in matte black sports bra and hiking shorts standing on a rocky mountain ridge with sweeping vista in background, dramatic golden hour lighting, slight wind in hair, confident pose looking toward distant peaks, breathable mesh fabric subtly visible, lifestyle adventure photography editorial, 9:16 vertical composition, full body with safe margins, ultra detailed, 720x1280"),
+    ("11-beach-coast", "coastal lifestyle shot of same asian woman in matte black sports bra walking along wet sand at sunset, ocean waves and distant horizon, warm orange-pink sky, footprints in sand behind her, soft sea breeze in hair, breathable mesh fabric visible, peaceful confident expression, fashion editorial photography, 9:16 vertical composition, full body with safe margins, ultra detailed, 720x1280"),
 ]
 
 
-def call_seedream(prompt: str, retries: int = 2, timeout: int = 120) -> str:
+def image_size_for_name(name: str) -> str:
+    """Lifestyle shots double as video keyframes, so generate them in vertical format."""
+    return "720x1280" if name.split("-", 1)[0] in {"07", "08", "09", "10", "11"} else "1024x1024"
+
+
+def call_seedream(prompt: str, size: str, retries: int = 2, timeout: int = 120) -> str:
     """Call ARK Seedream API and return image URL. Retries on transient errors."""
     body = json.dumps({
         "model": MODEL,
         "prompt": prompt,
-        "size": "1024x1024",
+        "size": size,
         "watermark": False,
+        "negative_prompt": NEGATIVE_PROMPT,
     }).encode("utf-8")
     headers = {
         "Authorization": f"Bearer {API_KEY}",
@@ -94,10 +107,11 @@ def main() -> int:
     t0 = time.time()
     for i, (name, prompt) in enumerate(PROMPTS, start=1):
         out_path = os.path.join(OUT_DIR, f"{name}.png")
-        print(f"[{i:02d}/11] {name} ... ", end="", flush=True)
+        size_hint = image_size_for_name(name)
+        print(f"[{i:02d}/11] {name} ({size_hint}) ... ", end="", flush=True)
         ts = time.time()
         try:
-            url = call_seedream(prompt)
+            url = call_seedream(prompt, size_hint)
             size = download(url, out_path)
             elapsed = time.time() - ts
             print(f"OK {size:,}B ({elapsed:.1f}s)")

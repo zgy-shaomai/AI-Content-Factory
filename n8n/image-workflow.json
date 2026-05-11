@@ -1,5 +1,5 @@
 {
-  "name": "ContentFactory · Image Pipeline (YN-BRA-001 baseline)",
+  "name": "ContentFactory Image Pipeline",
   "nodes": [
     {
       "parameters": {
@@ -9,25 +9,31 @@
         "options": {}
       },
       "id": "a1f2c3d4-1101-4001-8101-111111111101",
-      "name": "Webhook · /trigger/image",
+      "name": "触发器 /trigger/image",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1.1,
-      "position": [-1600, 0],
+      "position": [
+        -1600,
+        0
+      ],
       "webhookId": "cf-image-trigger-yfn-001"
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT t.id AS task_id, t.product_id, p.style_template_id, t.status AS task_status, p.sku, p.name AS name_cn, (p.spec->>'name_en') AS name_en, p.spec AS attributes_json, (p.spec->>'canonical_model_ref') AS canonical_model_ref, p.selling_points AS raw_selling_points, p.reference_image_urls AS reference_image_ids, st.brand_colors AS brand_palette, st.model_features AS model_descriptor, (st.extra->>'lighting') AS lighting, (st.extra->>'composition') AS composition, (st.extra->>'lens') AS lens, array_to_string(st.mood_keywords, ', ') AS mood, COALESCE(st.extra->>'negative_prompt', array_to_string(st.forbidden_words, ', ')) AS style_negative_prompt FROM tasks t JOIN products p ON p.id = t.product_id JOIN style_templates st ON st.id = p.style_template_id WHERE t.id = $1::uuid LIMIT 1;",
+        "query": "SELECT t.id AS task_id, t.product_id, p.style_template_id, t.status AS task_status, t.requested_count, COALESCE(t.parameters, '{}'::jsonb) AS task_parameters, p.sku, p.name AS name_cn, p.category, p.primary_color, p.target_audience, p.use_scenarios, (p.spec->>'name_en') AS name_en, p.spec AS attributes_json, (p.spec->>'canonical_model_ref') AS canonical_model_ref, p.selling_points AS raw_selling_points, p.reference_image_urls AS reference_image_ids, st.brand_colors AS brand_palette, st.model_features AS model_descriptor, (st.extra->>'lighting') AS lighting, (st.extra->>'composition') AS composition, (st.extra->>'lens') AS lens, array_to_string(st.mood_keywords, ', ') AS mood, COALESCE(st.extra->>'negative_prompt', array_to_string(st.forbidden_words, ', ')) AS style_negative_prompt FROM tasks t JOIN products p ON p.id = t.product_id JOIN style_templates st ON st.id = p.style_template_id WHERE t.id = $1::uuid LIMIT 1;",
         "options": {
           "queryReplacement": "={{ [$json.body.task_id] }}"
         }
       },
       "id": "a1f2c3d4-1102-4002-8102-111111111102",
-      "name": "Postgres · Load product+style",
+      "name": "读取商品与风格",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [-1380, 0],
+      "position": [
+        -1380,
+        0
+      ],
       "credentials": {
         "postgres": {
           "id": "cred-pg-content-factory",
@@ -38,16 +44,19 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO generation_runs (id, task_id, sequence_no, model_provider, model_name, purpose, status, started_at, input_payload) VALUES (gen_random_uuid(), $1::uuid, COALESCE((SELECT MAX(sequence_no)+1 FROM generation_runs WHERE task_id = $1::uuid), 1), 'volcengine_ark', 'doubao-seedream-4-0-250828', 'image_product', 'running', now(), ($3::jsonb) || jsonb_build_object('product_id', $2)) RETURNING id;",
+        "query": "INSERT INTO generation_runs (id, task_id, sequence_no, model_provider, model_name, purpose, status, started_at, input_payload) VALUES (gen_random_uuid(), $1::uuid, COALESCE((SELECT MAX(sequence_no)+1 FROM generation_runs WHERE task_id = $1::uuid), 1), $4, $5, 'image_product', 'running', now(), ($3::jsonb) || jsonb_build_object('product_id', $2, 'model_provider', $4, 'model_name', $5)) RETURNING id;",
         "options": {
-          "queryReplacement": "={{ [$json.task_id, $json.product_id, JSON.stringify({ trigger: 'webhook', shot_set: 'full' })] }}"
+          "queryReplacement": "={{ [$json.task_id, $json.product_id, JSON.stringify({ trigger: 'webhook', shot_set: 'full' }), $env.IMAGE_PROVIDER || 'volcengine_ark', $env.IMAGE_MODEL || $env.ARK_IMAGE_MODEL || 'doubao-seedream-4-0-250828'] }}"
         }
       },
       "id": "a1f2c3d4-1103-4003-8103-111111111103",
-      "name": "Postgres · Insert generation_run",
+      "name": "写入生成批次",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [-1160, 0],
+      "position": [
+        -1160,
+        0
+      ],
       "credentials": {
         "postgres": {
           "id": "cred-pg-content-factory",
@@ -58,76 +67,74 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://5dock.com/v1/chat/completions",
+        "url": "={{(($env.LLM_BASE_URL || $env.NEWAPI_BASE_URL || 'https://5dock.com/v1').replace(/\\/$/, '')) + '/chat/completions'}}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ {\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.4,\n  \"max_tokens\": 2500,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a senior creative director for an apparel e-commerce content factory. Distill product attributes and Chinese marketing copy into 5-7 ranked selling points, each with rank, text_cn (≤18 chars), text_en, visual_hint, category. Output strict JSON only.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"=== ATTRIBUTES ===\\n\" + JSON.stringify($('Postgres · Load product+style').item.json.attributes_json || {}) + \"\\n\\n=== ORIGINAL CN COPY ===\\n\" + JSON.stringify($('Postgres · Load product+style').item.json.raw_selling_points || []) + \"\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: \" + JSON.stringify($('Postgres · Load product+style').item.json.brand_palette || []) + \"\\nmood: \" + JSON.stringify($('Postgres · Load product+style').item.json.mood || '') + \"\\n\\nReturn { \\\"selling_points\\\": [...] }.\"\n    }\n  ]\n} }}",
+        "jsonBody": "={{ (() => {\n  const product = $(\"读取商品与风格\").item.json;\n  const taskParams = product.task_parameters || {};\n  const strategy = taskParams.prompt_strategy || {};\n  const latitude = strategy.creative_latitude || 'balanced';\n  return {\n    \"model\": ($env.LLM_MODEL || \"claude-sonnet-4-5-20250929\"),\n    \"temperature\": latitude === 'strict' ? 0.25 : (latitude === 'exploratory' ? 0.55 : 0.4),\n    \"max_tokens\": 2500,\n    \"response_format\": { \"type\": \"json_object\" },\n    \"messages\": [\n      {\n        \"role\": \"system\",\n        \"content\": [\n          \"You are a senior creative director for an apparel ecommerce content factory.\",\n          \"Distill product facts and marketing copy into ranked visual selling points for image/video generation.\",\n          \"Use only supplied product evidence; if a detail is missing, mark it as inferred in visual_hint instead of inventing a hard product fact.\",\n          \"First separate locked_facts, soft_inferences, and forbidden_inventions before writing creative claims.\",\n          \"Every selling point must cite evidence_fields and include a risk_note when the visual expression could overclaim.\",\n          \"Never invent brand names, logos, slogans, labels, hangtags, badges, or trademark-like graphics. Treat brand/logo information as locked facts only when it is explicitly supplied.\",\n          \"Output strict JSON only: { locked_facts: [], soft_inferences: [], forbidden_inventions: [], selling_points: [{ rank, claim, text_cn, text_en, visual_translation, category, evidence_fields, risk_note }] }.\"\n        ].join(' ')\n      },\n      {\n        \"role\": \"user\",\n        \"content\": [\n          \"=== PRODUCT ===\",\n          JSON.stringify({ sku: product.sku, name: product.name_cn, category: product.category, primary_color: product.primary_color, audience: product.target_audience, scenes: product.use_scenarios }),\n          \"=== ATTRIBUTES ===\",\n          JSON.stringify(product.attributes_json || {}),\n          \"=== ORIGINAL CN COPY ===\",\n          JSON.stringify(product.raw_selling_points || []),\n          \"=== STYLE TEMPLATE ===\",\n          JSON.stringify({ brand_palette: product.brand_palette || [], model_descriptor: product.model_descriptor || {}, mood: product.mood || '', lighting: product.lighting || '', composition: product.composition || '', lens: product.lens || '' }),\n          \"=== PROMPT STRATEGY ===\",\n          JSON.stringify(strategy || {}),\n          \"Return { locked_facts, soft_inferences, forbidden_inventions, selling_points }.\"\n        ].join('\\\\n')\n      }\n    ]\n  };\n})() }}",
         "options": {
           "timeout": 60000,
-          "response": { "response": { "responseFormat": "json" } }
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
         }
       },
       "id": "a1f2c3d4-1104-4004-8104-111111111104",
-      "name": "LLM · Selling points (5dock)",
+      "name": "提炼卖点（LLM Provider）",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-940, -120],
+      "position": [
+        -940,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "cred-5dock-newapi",
-          "name": "5dock NewAPI · Authorization"
+          "id": "cred-llm-provider",
+          "name": "cred-llm-provider"
         }
-      }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://5dock.com/v1/chat/completions",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ {\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"temperature\": 0.6,\n  \"max_tokens\": 6000,\n  \"response_format\": { \"type\": \"json_object\" },\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a senior prompt engineer for Seedream 4.0. Generate 6 product-shot prompts (studio_front, studio_side, studio_back, fabric_macro, zipper_action, logo_closeup) AND 5 scene prompts (scene_yoga_studio, scene_gym_training, scene_running_park, scene_outdoor_mountain, scene_beach). Each en_prompt 80-150 words English, dense with subject, garment details, lighting, composition, lens, style keywords, and reference image tags [reference: id, weight: 0.x]. Inject brand_palette and model_descriptor verbatim. Always preserve original tonal logo on left chest 6cm below collarbone 3cm wide. Color discipline: matte black neutral undertone no navy or warm shift. Output JSON: { shared_negative_prompt, prompts: [11 items each with shot_id, shot_type, en_prompt, suggested_size, ref_image_ids, guidance_scale, seed_hint] }.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"=== ATTRIBUTES ===\\n\" + JSON.stringify($('Postgres · Load product+style').item.json.attributes_json || {}) + \"\\n\\n=== SELLING POINTS ===\\n\" + JSON.stringify($json.choices?.[0]?.message?.content || '') + \"\\n\\n=== STYLE TEMPLATE ===\\nbrand_palette: \" + JSON.stringify($('Postgres · Load product+style').item.json.brand_palette || []) + \"\\nmodel_descriptor: \" + JSON.stringify($('Postgres · Load product+style').item.json.model_descriptor || []) + \"\\nlighting: \" + JSON.stringify($('Postgres · Load product+style').item.json.lighting || '') + \"\\ncomposition: \" + JSON.stringify($('Postgres · Load product+style').item.json.composition || '') + \"\\nlens: \" + JSON.stringify($('Postgres · Load product+style').item.json.lens || '') + \"\\nmood: \" + JSON.stringify($('Postgres · Load product+style').item.json.mood || '') + \"\\n\\n=== REFERENCE IMAGES AVAILABLE ===\\nmodel_ref_001 (canonical), product_ref_001 (flat-lay), product_ref_002 (back mesh detail), scene_ref_yoga_001, scene_ref_gym_001\\n\\nReturn JSON: { shared_negative_prompt, prompts: [...11 items...] }\"\n    }\n  ]\n} }}",
-        "options": {
-          "timeout": 90000,
-          "response": { "response": { "responseFormat": "json" } }
-        }
+        "jsCode": "// Deterministic prompt builder. It uses the selling-point LLM output when available,\n// but does not make a second LLM call, so the image pipeline is not blocked by model routing.\nconst product = $(\"读取商品与风格\").item.json;\nconst taskParams = product.task_parameters || {};\nconst strategy = taskParams.prompt_strategy || {};\nconst requestedCount = Math.max(1, Number(product.requested_count || taskParams.requested_count || 11));\n\nfunction parseJsonLoose(value) {\n  if (value && typeof value !== 'string') return value;\n  let text = String(value || '').trim();\n  text = text.replace(/^```(?:json)?\\s*/i, '').replace(/```$/i, '').trim();\n  const firstObject = text.indexOf('{');\n  const lastObject = text.lastIndexOf('}');\n  if (firstObject >= 0 && lastObject > firstObject) text = text.slice(firstObject, lastObject + 1);\n  try { return JSON.parse(text); } catch (_) { return { selling_points: [] }; }\n}\n\nfunction asList(value) {\n  if (Array.isArray(value)) return value.filter(Boolean).map(v => String(v).trim()).filter(Boolean);\n  if (!value) return [];\n  return String(value).split(/[;?,?\\n]+/).map(v => v.trim()).filter(Boolean);\n}\n\nfunction uniqueList(values) {\n  const out = [];\n  const seen = new Set();\n  (values || []).flat().forEach(v => {\n    if (!v) return;\n    const s = String(v).trim();\n    if (!s) return;\n    const key = s.toLowerCase();\n    if (!seen.has(key)) { seen.add(key); out.push(s); }\n  });\n  return out;\n}\n\nconst sellingAnalysis = parseJsonLoose($input.first().json.choices?.[0]?.message?.content || '');\nconst rawSellingPoints = asList(product.raw_selling_points);\nconst analysedPoints = asList((sellingAnalysis.selling_points || []).map(p => p.visual_translation || p.claim || p.text_en || p.text_cn));\nconst sellingPoints = uniqueList([analysedPoints, rawSellingPoints]).slice(0, 6);\nconst scenes = asList(product.use_scenarios).length ? asList(product.use_scenarios) : ['clean studio', 'lifestyle training space', 'outdoor active scene'];\nconst blockedBrands = uniqueList([\n  'Nike', 'Nike Swoosh', 'swoosh logo', 'Li-Ning', '??', 'lining logo', 'adidas', 'three stripes',\n  'Puma', 'Under Armour', 'Lululemon', 'Anta', '??', 'Jordan', 'New Balance', 'Reebok', 'ASICS', 'Fila', 'Decathlon',\n  strategy.blocked_brand_terms || [], (sellingAnalysis.forbidden_brands || [])\n]);\nconst authorizedBrand = String(strategy.authorized_brand_text || '').trim();\nconst logoPolicy = strategy.logo_policy || 'no_logo';\nconst logoRule = authorizedBrand && logoPolicy !== 'no_logo'\n  ? `only authorized brand/logo may appear: ${authorizedBrand}; no other brand marks or readable labels`\n  : 'plain unbranded apparel, no visible logo, no text label, no slogan, no badge, no hangtag text';\nconst negative = uniqueList([\n  strategy.negative_prompt || '', product.style_negative_prompt || '',\n  'third-party brand logo', 'unauthorized trademark', 'unauthorized wordmark', 'random letters', 'random numbers',\n  'slogan text', 'hangtag text', 'watermark', 'text overlay', 'distorted garment construction', 'bad anatomy',\n  blockedBrands\n]).join(', ');\n\nconst category = product.category || 'apparel';\nconst color = product.primary_color || 'neutral product color';\nconst name = product.name_cn || product.name_en || 'product';\nconst sku = product.sku || 'SKU';\nconst guardrails = asList(strategy.visual_guardrails);\nconst identityParts = uniqueList([\n  strategy.consistency?.garment_identity_hint || '',\n  `${sku} ${name}`, category, `primary color ${color}`, sellingPoints.join('; '), logoRule,\n  guardrails.join('; ')\n]);\nconst sharedIdentity = identityParts.join('; ').slice(0, 1100);\n\nconst defaultShots = [\n  ['studio_front', 'product_front', 'clean studio front view, full upper body, eye-level framing, soft commercial lighting', '1024x1024'],\n  ['studio_side', 'product_side', 'clean studio side profile, show fit and side seams, controlled shadow, sharp product detail', '1024x1024'],\n  ['studio_back', 'product_back', 'clean studio back view, show back construction and support zones, neutral background', '1024x1024'],\n  ['fabric_macro', 'detail_fabric', 'macro close-up of fabric surface and breathable texture, no face, no logo, product-detail lighting', '1024x1024'],\n  ['closure_detail', 'detail_closure', 'close-up action detail of closure or key construction feature, hands natural, product remains accurate', '1024x1024'],\n  ['support_detail', 'detail_support', 'three-quarter crop highlighting structure, support, stitching and material finish, no readable text', '1024x1024'],\n  ['scene_primary', 'lifestyle_scene', `${scenes[0]} lifestyle image, natural pose, full product readable, vertical social composition`, '1536x2048'],\n  ['scene_secondary', 'lifestyle_scene', `${scenes[1] || scenes[0]} active-use image, controlled motion, garment identity unchanged`, '1536x2048'],\n  ['scene_tertiary', 'lifestyle_scene', `${scenes[2] || scenes[0]} commercial lifestyle image, product clarity prioritized`, '1536x2048'],\n  ['scene_close', 'lifestyle_detail', 'lifestyle close crop showing material and fit in use, consistent model and garment identity', '1536x2048'],\n  ['hero_social', 'hero_commerce', 'premium ecommerce hero image, centered confident pose, clean background depth, strong product readability', '1536x2048']\n];\nconst userPlan = asList(strategy.shot_plan).map((line, idx) => [\n  `user_shot_${String(idx + 1).padStart(2, '0')}`, 'user_planned', line, idx >= 6 ? '1536x2048' : '1024x1024'\n]);\nconst shots = (userPlan.length ? userPlan : defaultShots);\nlet batchSeed = 0;\nfor (const ch of String(product.task_id || sku || 'content-factory')) {\n  batchSeed = ((batchSeed * 31) + ch.charCodeAt(0)) >>> 0;\n}\nbatchSeed = Math.max(100000, batchSeed % 1900000000);\nconst prompts = [];\nfor (let idx = 0; idx < requestedCount; idx += 1) {\n  const shot = shots[idx % shots.length];\n  const point = sellingPoints[idx % Math.max(1, sellingPoints.length)] || 'product clarity and commercial usefulness';\n  const enPrompt = [\n    `Commerce-grade image for ${name}, ${category}, ${color}.`,\n    `Garment identity lock: ${sharedIdentity}.`,\n    `Shot direction: ${shot[2]}.`,\n    `Visual selling point: ${point}.`,\n    'Preserve exact same garment category, silhouette, color undertone, fabric finish, seams, panels, closure, neckline and logo policy across the full batch.',\n    `Brand safety: ${logoRule}.`,\n    'Professional ecommerce photography, realistic anatomy, clean lighting, product remains readable and commercially usable.'\n  ].join(' ');\n  prompts.push({\n    shot_id: shot[0],\n    shot_type: shot[1],\n    en_prompt: enPrompt,\n    suggested_size: shot[3],\n    ref_image_ids: [],\n    guidance_scale: strategy.creative_latitude === 'strict' ? 4.5 : 5.5,\n    seed_hint: batchSeed + idx * 9973,\n    fact_refs: ['product.name', 'product.category', 'product.primary_color', 'product.selling_points'],\n    must_show: [name, category, color, point, logoRule],\n    must_not_change: ['garment identity', 'primary color', 'silhouette and fit', 'fabric finish', 'logo policy'],\n    forbidden_inventions: ['third-party logo', 'readable garment text', 'unauthorized label or hangtag', ...blockedBrands.map(b => `${b} logo or wordmark`)],\n    negative_prompt: negative,\n    quality_check: { product_truth: true, no_third_party_logo: true, same_garment_identity: true }\n  });\n}\n\nconst payload = {\n  shared_garment_identity: sharedIdentity,\n  shared_negative_prompt: negative,\n  forbidden_brands: blockedBrands,\n  locked_facts: uniqueList([sku, name, category, color, sellingPoints]),\n  prompts\n};\nreturn [{ json: { choices: [{ message: { content: JSON.stringify(payload) } }] } }];\n"
       },
       "id": "a1f2c3d4-1105-4005-8105-111111111105",
-      "name": "LLM · Build 11 prompts (5dock)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [-720, -120],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "cred-5dock-newapi",
-          "name": "5dock NewAPI · Authorization"
-        }
-      }
+      "name": "生成 11 条提示词（LLM Provider）",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -720,
+        -120
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Parse the LLM JSON content and explode into 11 items, one per shot prompt.\nconst raw = $input.first().json.choices[0].message.content;\nlet parsed;\ntry {\n  parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;\n} catch (e) {\n  throw new Error('LLM did not return valid JSON: ' + e.message);\n}\nif (!parsed.prompts || !Array.isArray(parsed.prompts) || parsed.prompts.length < 11) {\n  throw new Error('Expected 11 prompts in LLM response, got ' + (parsed.prompts ? parsed.prompts.length : 0));\n}\nconst sharedNeg = parsed.shared_negative_prompt || '';\nconst runId = $('Postgres · Insert generation_run').item.json.id;\nconst sku = $('Postgres · Load product+style').item.json.sku;\nconst productId = $('Postgres · Load product+style').item.json.product_id;\nconst taskId = $('Postgres · Load product+style').item.json.task_id;\n\nreturn parsed.prompts.map((p, idx) => ({\n  json: {\n    run_id: runId,\n    task_id: taskId,\n    product_id: productId,\n    sku: sku,\n    shot_id: p.shot_id,\n    shot_type: p.shot_type,\n    en_prompt: p.en_prompt,\n    negative_prompt: sharedNeg,\n    suggested_size: p.suggested_size || '2048x2048',\n    ref_image_ids: p.ref_image_ids || [],\n    guidance_scale: p.guidance_scale || 5.5,\n    seed: p.seed_hint || (Math.floor(Math.random() * 2_000_000_000)),\n    idx: idx,\n    ref_image_urls: (p.ref_image_ids || []).map(id => {\n      if (id.startsWith('scene_ref_')) {\n        return `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/refs/scenes/${id}.jpg`;\n      }\n      return `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/refs/${sku}/${id}.jpg`;\n    })\n  }\n}));"
+        "jsCode": "// Parse the LLM JSON content and explode into one item per image prompt.\nconst raw = $input.first().json.choices?.[0]?.message?.content;\nfunction parseJsonLoose(value) {\n  if (value && typeof value !== 'string') return value;\n  let text = String(value || '').trim();\n  text = text.replace(/^```(?:json)?\\s*/i, '').replace(/```$/i, '').trim();\n  const firstObject = text.indexOf('{');\n  const lastObject = text.lastIndexOf('}');\n  if (firstObject >= 0 && lastObject > firstObject) {\n    text = text.slice(firstObject, lastObject + 1);\n  }\n  return JSON.parse(text);\n}\nlet parsed;\ntry {\n  parsed = parseJsonLoose(raw);\n} catch (e) {\n  throw new Error('LLM did not return parseable JSON: ' + e.message + ' raw=' + String(raw || '').slice(0, 180));\n}\nconst product = $(\"读取商品与风格\").item.json;\nconst taskParams = product.task_parameters || {};\nconst strategy = taskParams.prompt_strategy || {};\nconst requestedCount = Math.max(1, Number(product.requested_count || taskParams.requested_count || 11));\nif (!parsed.prompts || !Array.isArray(parsed.prompts) || parsed.prompts.length < requestedCount) {\n  throw new Error('Expected ' + requestedCount + ' prompts in LLM response, got ' + (parsed.prompts ? parsed.prompts.length : 0));\n}\nconst defaultForbiddenBrands = [\n  'Nike', 'NIKE', 'Nike Swoosh', 'swoosh logo', 'Li-Ning', 'LI-NING', '\\u674e\\u5b81', 'lining logo',\n  'adidas', 'ADIDAS', 'three stripes', 'trefoil logo', 'Puma', 'Under Armour', 'Lululemon',\n  'Anta', '\\u5b89\\u8e0f', 'Jordan', 'Jumpman', 'New Balance', 'Reebok', 'ASICS', 'Fila', 'Decathlon'\n];\nconst blockedBrandTerms = Array.from(new Set([\n  ...defaultForbiddenBrands,\n  ...((strategy.blocked_brand_terms || strategy.forbidden_brands || [])),\n  ...((parsed.forbidden_brands || []))\n].filter(Boolean).map(v => String(v).trim()).filter(Boolean)));\nconst brandNegative = [\n  'third-party brand logo', 'third-party brand name', 'unauthorized trademark', 'unauthorized wordmark',\n  'unauthorized monogram', 'unauthorized chest logo', 'unauthorized sleeve logo', 'unauthorized waistband logo',\n  'random letters', 'random numbers', 'slogan text', 'hangtag text', 'branded background signage',\n  'lookalike sportswear branding', 'fake logo', 'extra logo', 'duplicated logo', 'logo moved from reference',\n  ...blockedBrandTerms\n].join(', ');\nconst authorizedBrand = String(strategy.authorized_brand_text || '').trim();\nconst logoPolicy = strategy.logo_policy || 'no_logo';\nconst logoRule = authorizedBrand && logoPolicy !== 'no_logo'\n  ? `only authorized brand/logo may appear: ${authorizedBrand}; no other brand marks or readable labels`\n  : 'plain unbranded garment, no visible logo, no text label, no slogan, no badge, no hangtag text';\nconst sellingPoints = Array.isArray(product.raw_selling_points)\n  ? product.raw_selling_points.join('; ')\n  : String(product.raw_selling_points || '');\nconst attributes = product.attributes_json || {};\nconst attributeBits = [\n  attributes.sub_category || attributes.product_type || '',\n  attributes.silhouette || attributes.fit || '',\n  attributes.material_main || attributes.material || '',\n  attributes.fabric_finish || '',\n  attributes.closure_type || attributes.closure || '',\n  attributes.neckline || '',\n  attributes.logo_placement || ''\n].filter(Boolean).join(', ');\nconst consistency = strategy.consistency || {};\nconst fallbackGarmentIdentity = [\n  consistency.garment_identity_hint || '',\n  product.name_cn || product.name_en || '',\n  product.category || '',\n  product.primary_color ? `primary color ${product.primary_color}` : '',\n  sellingPoints ? `selling points ${sellingPoints}` : '',\n  attributeBits ? `attributes ${attributeBits}` : '',\n  product.canonical_model_ref ? `reference ${product.canonical_model_ref}` : ''\n].filter(Boolean).join('; ');\nconst garmentIdentity = uniqueList([parsed.shared_garment_identity || '', fallbackGarmentIdentity]).join('; ').slice(0, 1100);\nlet batchSeed = 0;\nfor (const ch of String(product.task_id || product.sku || 'content-factory')) {\n  batchSeed = ((batchSeed * 31) + ch.charCodeAt(0)) >>> 0;\n}\nbatchSeed = Math.max(100000, batchSeed % 1900000000);\nconst sharedNeg = [brandNegative, parsed.shared_negative_prompt, strategy.negative_prompt, product.style_negative_prompt]\n  .filter(Boolean).join(', ');\nfunction uniqueList(values) {\n  const out = [];\n  const seen = new Set();\n  (values || []).flat().forEach(v => {\n    if (!v) return;\n    const s = String(v).trim();\n    if (!s) return;\n    const key = s.toLowerCase();\n    if (!seen.has(key)) { seen.add(key); out.push(s); }\n  });\n  return out;\n}\nconst runId = $(\"写入生成批次\").item.json.id;\nconst sku = product.sku;\nconst productId = product.product_id;\nconst taskId = product.task_id;\nconst productRefs = product.reference_image_ids || [];\nconst refLookup = {};\nproductRefs.forEach((ref, idx) => {\n  if (typeof ref === 'string' && /^https?:\\/\\//i.test(ref)) {\n    refLookup[`product_ref_${idx + 1}`] = ref;\n    refLookup[`ref_${idx + 1}`] = ref;\n  }\n});\nfunction refToUrl(refId) {\n  if (!refId || typeof refId !== 'string') return null;\n  if (/^https?:\\/\\//i.test(refId)) return refId;\n  if (refLookup[refId]) return refLookup[refId];\n  if (refId.startsWith('scene_ref_')) {\n    return `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/refs/scenes/${refId}.jpg`;\n  }\n  return `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/refs/${sku}/${refId}.jpg`;\n}\n\nreturn parsed.prompts.slice(0, requestedCount).map((p, idx) => ({\n  json: {\n    run_id: runId,\n    task_id: taskId,\n    product_id: productId,\n    sku: sku,\n    shot_id: p.shot_id || `shot_${String(idx + 1).padStart(2, '0')}`,\n    shot_type: p.shot_type || 'auto',\n    en_prompt: [\n      garmentIdentity ? `GARMENT IDENTITY LOCK: ${garmentIdentity}. Keep this exact same garment across the whole image batch; only pose, camera, crop, lighting, and background may change.` : '',\n      p.en_prompt || '',\n      `Batch consistency: same clothing category, cut, fit, color, fabric finish, seams, panels, closure, neckline, and logo/label policy as every other image in this task.`,\n      `Brand safety: ${logoRule}.`\n    ].filter(Boolean).join(' '),\n    negative_prompt: [p.negative_prompt, sharedNeg].filter(Boolean).join(', '),\n    suggested_size: p.suggested_size || (String(p.shot_type || '').includes('scene') ? '1536x2048' : '2048x2048'),\n    ref_image_ids: p.ref_image_ids || [],\n    guidance_scale: p.guidance_scale || (strategy.creative_latitude === 'strict' ? 4.5 : 5.5),\n    seed: p.seed_hint || (batchSeed + idx * 9973),\n    fact_refs: p.fact_refs || [],\n    garment_identity: garmentIdentity,\n    authorized_brand_text: authorizedBrand,\n    logo_policy: logoPolicy,\n    forbidden_brand_terms: blockedBrandTerms,\n    must_show: uniqueList([p.must_show || [], logoRule]),\n    must_not_change: uniqueList([p.must_not_change || [], `brand/logo rule: ${logoRule}`, garmentIdentity ? `same garment identity: ${garmentIdentity}` : '', product.primary_color ? `primary color: ${product.primary_color}` : '', 'same clothing category, cut, fit, fabric finish, seams, panels, closure, neckline, waistband/pockets if visible across the full batch']),\n    forbidden_inventions: uniqueList([p.forbidden_inventions || [], blockedBrandTerms.map(b => `${b} logo or wordmark`), 'random letters or numbers on garment', 'unapproved hangtag or label text']),\n    quality_check: {\n      ...(p.quality_check || {}),\n      authorized_brand_only: true,\n      no_third_party_logo: true,\n      no_third_party_text: true,\n      no_unapproved_label_or_hangtag: true,\n      requires_reject_if_any_forbidden_brand_visible: true\n    },\n    idx: idx,\n    ref_image_urls: (p.ref_image_ids || []).map(refToUrl).filter(Boolean)\n  }\n}));"
       },
       "id": "a1f2c3d4-1106-4006-8106-111111111106",
-      "name": "Code · Explode prompts",
+      "name": "拆分提示词清单",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-500, -120]
+      "position": [
+        -500,
+        -120
+      ]
     },
     {
       "parameters": {
@@ -135,29 +142,39 @@
         "options": {}
       },
       "id": "a1f2c3d4-1107-4007-8107-111111111107",
-      "name": "Split In Batches · 4 concurrent",
+      "name": "分批并发（4 路）",
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
-      "position": [-280, -120]
+      "position": [
+        -280,
+        -120
+      ]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+        "url": "={{(($env.IMAGE_BASE_URL || $env.MEDIA_BASE_URL || $env.ARK_ENDPOINT || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\\/$/, '')) + '/images/generations'}}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"doubao-seedream-4-0-250828\",\n  \"prompt\": {{ JSON.stringify($json.en_prompt) }},\n  \"image\": {{ JSON.stringify($json.ref_image_urls) }},\n  \"size\": {{ JSON.stringify($json.suggested_size) }},\n  \"seed\": {{ $json.seed }},\n  \"guidance_scale\": {{ $json.guidance_scale }},\n  \"watermark\": false,\n  \"response_format\": \"url\",\n  \"negative_prompt\": {{ JSON.stringify($json.negative_prompt) }}\n}",
+        "jsonBody": "={{ (() => {\n  const refs = Array.isArray($json.ref_image_urls) ? $json.ref_image_urls.filter(Boolean) : [];\n  const body = {\n    model: $env.IMAGE_MODEL || $env.ARK_IMAGE_MODEL || \"doubao-seedream-4-0-250828\",\n    prompt: $json.en_prompt,\n    size: $json.suggested_size || \"1024x1024\",\n    seed: Number($json.seed) || undefined,\n    guidance_scale: Number($json.guidance_scale) || 5.5,\n    watermark: false,\n    response_format: \"url\",\n    negative_prompt: $json.negative_prompt || \"\"\n  };\n  if (refs.length) body.image = refs;\n  return body;\n})() }}",
         "options": {
           "timeout": 90000,
-          "response": { "response": { "responseFormat": "json" } },
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
           "retry": {
             "limit": 3,
             "waitBetweenTries": 6000
@@ -165,14 +182,17 @@
         }
       },
       "id": "a1f2c3d4-1108-4008-8108-111111111108",
-      "name": "Seedream · Generate image",
+      "name": "调用图片 Provider 生图",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [-60, -120],
+      "position": [
+        -60,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "cred-volcengine-ark",
-          "name": "Volcengine Ark · Bearer"
+          "id": "cred-image-provider",
+          "name": "cred-image-provider"
         }
       },
       "onError": "continueErrorOutput",
@@ -186,10 +206,13 @@
         "unit": "seconds"
       },
       "id": "a1f2c3d4-1109-4009-8109-111111111109",
-      "name": "Wait · slot before next batch",
+      "name": "等待下一批次空位",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
-      "position": [160, -240]
+      "position": [
+        160,
+        -240
+      ]
     },
     {
       "parameters": {
@@ -197,24 +220,34 @@
         "url": "={{$json.data[0].url}}",
         "options": {
           "timeout": 60000,
-          "response": { "response": { "responseFormat": "file" } }
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
         }
       },
       "id": "a1f2c3d4-1110-4010-8110-111111111110",
-      "name": "HTTP · Download generated image",
+      "name": "下载生成图片",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [160, -120]
+      "position": [
+        160,
+        -120
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// Compute OSS keys and merge upstream metadata into a single payload for the next nodes.\nconst incoming = $input.first().json;\nconst binary = $input.first().binary;\nconst meta = $('Code · Explode prompts').item.json;\nconst sku = meta.sku;\nconst runId = meta.run_id;\nconst shotId = meta.shot_id;\nconst idx = meta.idx;\nconst ossKey = `archive/${sku}/${runId}/${shotId}_${String(idx).padStart(2,'0')}.png`;\nconst ossThumbKey = `archive/${sku}/${runId}/thumb_${shotId}_${String(idx).padStart(2,'0')}.jpg`;\nconst arkRequestId = incoming.id || incoming.request_id || '';\nconst arkUrl = (incoming.data && incoming.data[0] && incoming.data[0].url) || '';\n\nreturn [{\n  json: {\n    ...meta,\n    ark_request_id: arkRequestId,\n    ark_image_url: arkUrl,\n    oss_key: ossKey,\n    oss_thumb_key: ossThumbKey,\n    oss_bucket: 'yfn-content-factory',\n    oss_endpoint: 'oss-cn-shanghai.aliyuncs.com',\n    oss_url: `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/${ossKey}`,\n    oss_thumb_url: `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/${ossThumbKey}`,\n    generation_cost_cny: 0.30,\n    image_bytes: binary && binary.data ? binary.data.fileSize || 0 : 0\n  },\n  binary: binary\n}];"
+        "jsCode": "// Compute OSS keys and merge upstream metadata for every generated image in the current batch.\nconst items = $input.all();\n\nreturn items.map((item, itemIndex) => {\n  const incoming = item.json || {};\n  const binary = item.binary;\n  let meta;\n\n  try {\n    meta = $('拆分提示词清单').itemMatching(itemIndex).json;\n  } catch (error) {\n    const splitItems = $('拆分提示词清单').all();\n    const paired = Array.isArray(item.pairedItem) ? item.pairedItem[0] : item.pairedItem;\n    const fallbackIndex = Number.isInteger(paired && paired.item) ? paired.item : itemIndex;\n    meta = (splitItems[fallbackIndex] && splitItems[fallbackIndex].json) || {};\n  }\n\n  const sku = meta.sku || 'unknown-sku';\n  const runId = meta.run_id || 'unknown-run';\n  const shotId = meta.shot_id || `shot_${itemIndex + 1}`;\n  const idx = Number.isInteger(meta.idx) ? meta.idx : itemIndex + 1;\n  const ossKey = `archive/${sku}/${runId}/${shotId}_${String(idx).padStart(2,'0')}.png`;\n  const ossThumbKey = `archive/${sku}/${runId}/thumb_${shotId}_${String(idx).padStart(2,'0')}.jpg`;\n  const arkRequestId = incoming.id || incoming.request_id || '';\n  const arkUrl = (incoming.data && incoming.data[0] && incoming.data[0].url) || '';\n\n  return {\n    json: {\n      ...meta,\n      ark_request_id: arkRequestId,\n      ark_image_url: arkUrl,\n      oss_key: ossKey,\n      oss_thumb_key: ossThumbKey,\n      oss_bucket: 'yfn-content-factory',\n      oss_endpoint: 'oss-cn-shanghai.aliyuncs.com',\n      oss_url: `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/${ossKey}`,\n      oss_thumb_url: `https://yfn-content-factory.oss-cn-shanghai.aliyuncs.com/${ossThumbKey}`,\n      generation_cost_cny: 0.30,\n      image_bytes: binary && binary.data ? binary.data.fileSize || 0 : 0\n    },\n    binary: binary\n  };\n});"
       },
       "id": "a1f2c3d4-1111-4011-8111-111111111111",
-      "name": "Code · Compute OSS key + metadata",
+      "name": "生成 OSS 路径与元数据",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [380, -120]
+      "position": [
+        380,
+        -120
+      ]
     },
     {
       "parameters": {
@@ -225,12 +258,30 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "image/png" },
-            { "name": "x-oss-meta-prompt-hash", "value": "={{$json.shot_id}}-{{$json.seed}}" },
-            { "name": "x-oss-meta-seed", "value": "={{$json.seed}}" },
-            { "name": "x-oss-meta-model", "value": "doubao-seedream-4-0-250828" },
-            { "name": "x-oss-meta-run-id", "value": "={{$json.run_id}}" },
-            { "name": "x-oss-meta-sku", "value": "={{$json.sku}}" }
+            {
+              "name": "Content-Type",
+              "value": "image/png"
+            },
+            {
+              "name": "x-oss-meta-prompt-hash",
+              "value": "={{$json.shot_id}}-{{$json.seed}}"
+            },
+            {
+              "name": "x-oss-meta-seed",
+              "value": "={{$json.seed}}"
+            },
+            {
+              "name": "x-oss-meta-model",
+              "value": "={{$env.IMAGE_MODEL || $env.ARK_IMAGE_MODEL || 'doubao-seedream-4-0-250828'}}"
+            },
+            {
+              "name": "x-oss-meta-run-id",
+              "value": "={{$json.run_id}}"
+            },
+            {
+              "name": "x-oss-meta-sku",
+              "value": "={{$json.sku}}"
+            }
           ]
         },
         "sendBinaryData": true,
@@ -240,10 +291,13 @@
         }
       },
       "id": "a1f2c3d4-1112-4012-8112-111111111112",
-      "name": "OSS · Upload PNG",
+      "name": "上传 PNG 到 OSS",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [600, -120],
+      "position": [
+        600,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "cred-aliyun-oss-signer",
@@ -257,16 +311,19 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO candidates (id, task_id, run_id, media_type, oss_url, thumbnail_url, prompt_snapshot, parameters_snapshot, status, sequence_no, created_at) SELECT gen_random_uuid(), gr.task_id, $1::uuid, 'image', $13, $14, $5, jsonb_build_object('product_id', $2, 'shot_id', $3, 'shot_type', $4, 'negative_prompt', $6, 'model_name', 'doubao-seedream-4-0-250828', 'model_provider', 'volcengine_ark', 'seed', $7, 'ref_image_ids', $8::jsonb, 'guidance_scale', $9, 'image_size', $10, 'oss_key', $11, 'oss_thumb_key', $12, 'ark_request_id', $15, 'generation_cost_cny', $16) || ($17::jsonb), 'pending_review', COALESCE((SELECT MAX(sequence_no)+1 FROM candidates WHERE task_id = gr.task_id), 1), now() FROM generation_runs gr WHERE gr.id = $1::uuid RETURNING id;",
+        "query": "INSERT INTO candidates (id, task_id, run_id, media_type, oss_url, thumbnail_url, prompt_snapshot, parameters_snapshot, status, sequence_no, created_at) SELECT gen_random_uuid(), gr.task_id, $1::uuid, 'image', $13, $14, $5, jsonb_build_object('product_id', $2, 'shot_id', $3, 'shot_type', $4, 'negative_prompt', $6, 'model_name', COALESCE(($17::jsonb)->>'model_name', 'doubao-seedream-4-0-250828'), 'model_provider', COALESCE(($17::jsonb)->>'model_provider', 'volcengine_ark'), 'seed', $7, 'ref_image_ids', $8::jsonb, 'guidance_scale', $9, 'image_size', $10, 'oss_key', $11, 'oss_thumb_key', $12, 'ark_request_id', $15, 'generation_cost_cny', $16) || ($17::jsonb), 'pending_review', COALESCE((SELECT MAX(sequence_no)+1 FROM candidates WHERE task_id = gr.task_id), 1), now() FROM generation_runs gr WHERE gr.id = $1::uuid RETURNING id;",
         "options": {
-          "queryReplacement": "={{ [$json.run_id, $json.product_id, $json.shot_id, $json.shot_type, $json.en_prompt, $json.negative_prompt, $json.seed, JSON.stringify($json.ref_image_ids), $json.guidance_scale, $json.suggested_size, $json.oss_key, $json.oss_thumb_key, $json.oss_url, $json.oss_thumb_url, $json.ark_request_id, $json.generation_cost_cny, JSON.stringify({ logo_preserved: true, fabric_keywords: ['breathable mesh','sweat-wicking nylon-spandex'], brand_palette_hash: 'sha1:matteblack-v1', image_bytes: $json.image_bytes })] }}"
+          "queryReplacement": "={{ [$json.run_id, $json.product_id, $json.shot_id, $json.shot_type, $json.en_prompt, $json.negative_prompt, $json.seed, JSON.stringify($json.ref_image_ids), $json.guidance_scale, $json.suggested_size, $json.oss_key, $json.oss_thumb_key, $json.ark_image_url || $json.oss_url, $json.ark_image_url || $json.oss_thumb_url, $json.ark_request_id, $json.generation_cost_cny, JSON.stringify({ model_name: $env.IMAGE_MODEL || $env.ARK_IMAGE_MODEL || 'doubao-seedream-4-0-250828', model_provider: $env.IMAGE_PROVIDER || 'volcengine_ark', fact_refs: $json.fact_refs || [], must_show: $json.must_show || [], must_not_change: $json.must_not_change || [], quality_check: $json.quality_check || {}, garment_identity: $json.garment_identity || '', logo_policy: $json.logo_policy || 'no_logo', authorized_brand_text: $json.authorized_brand_text || '', forbidden_brand_terms: $json.forbidden_brand_terms || [], forbidden_inventions: $json.forbidden_inventions || [], image_bytes: $json.image_bytes })] }}"
         }
       },
       "id": "a1f2c3d4-1113-4013-8113-111111111113",
-      "name": "Postgres · Insert candidate",
+      "name": "写入候选图记录",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [820, -120],
+      "position": [
+        820,
+        -120
+      ],
       "credentials": {
         "postgres": {
           "id": "cred-pg-content-factory",
@@ -283,21 +340,27 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"fields\": {\n    \"SKU\": {{ JSON.stringify($json.sku) }},\n    \"镜头\": {{ JSON.stringify($json.shot_id) }},\n    \"类型\": {{ JSON.stringify($json.shot_type) }},\n    \"封面URL\": {{ JSON.stringify($json.oss_thumb_url) }},\n    \"原图URL\": {{ JSON.stringify($json.oss_url) }},\n    \"Prompt\": {{ JSON.stringify($json.en_prompt) }},\n    \"Seed\": {{ $json.seed }},\n    \"审核状态\": \"待审核\",\n    \"run_id\": {{ JSON.stringify($json.run_id) }},\n    \"candidate_id\": {{ JSON.stringify($('Postgres · Insert candidate').item.json.id) }},\n    \"生成时间\": \"{{ $now.toISO() }}\"\n  }\n}",
+        "jsonBody": "={\n  \"fields\": {\n    \"SKU\": {{ JSON.stringify($json.sku) }},\n    \"镜头\": {{ JSON.stringify($json.shot_id) }},\n    \"类型\": {{ JSON.stringify($json.shot_type) }},\n    \"封面URL\": {{ JSON.stringify($json.oss_thumb_url) }},\n    \"原图URL\": {{ JSON.stringify($json.oss_url) }},\n    \"Prompt\": {{ JSON.stringify($json.en_prompt) }},\n    \"Seed\": {{ $json.seed }},\n    \"审核状态\": \"待审核\",\n    \"run_id\": {{ JSON.stringify($json.run_id) }},\n    \"candidate_id\": {{ JSON.stringify($('写入候选图记录').item.json.id) }},\n    \"生成时间\": \"{{ $now.toISO() }}\"\n  }\n}",
         "options": {
           "timeout": 30000
         }
       },
       "id": "a1f2c3d4-1114-4014-8114-111111111114",
-      "name": "Feishu · Bitable add review row",
+      "name": "写入飞书审核表",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1040, -120],
+      "position": [
+        1040,
+        -120
+      ],
       "credentials": {
         "httpHeaderAuth": {
           "id": "cred-feishu-tenant-token",
@@ -315,7 +378,10 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ]
         },
         "sendBody": true,
@@ -326,24 +392,30 @@
         }
       },
       "id": "a1f2c3d4-1115-4015-8115-111111111115",
-      "name": "Feishu · Notify reviewer",
+      "name": "通知审核人",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1260, -120]
+      "position": [
+        1260,
+        -120
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "UPDATE generation_runs SET status = 'failed', error_message = ($2::text || ': ' || $3::text), finished_at = now() WHERE id = $1::uuid;",
         "options": {
-          "queryReplacement": "={{ [$('Postgres · Insert generation_run').item.json.id, 'upstream_failure', JSON.stringify($json.error || $json)] }}"
+          "queryReplacement": "={{ [$('写入生成批次').item.json.id, 'upstream_failure', JSON.stringify($json.error || $json)] }}"
         }
       },
       "id": "a1f2c3d4-1116-4016-8116-111111111116",
-      "name": "Postgres · Mark run failed",
+      "name": "标记批次失败",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [380, 240],
+      "position": [
+        380,
+        240
+      ],
       "credentials": {
         "postgres": {
           "id": "cred-pg-content-factory",
@@ -358,35 +430,44 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json; charset=utf-8" }
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"msg_type\": \"text\",\n  \"content\": {\n    \"text\": \"[ALERT] image-pipeline run failed. run_id={{ $('Postgres · Insert generation_run').item.json.id }} step={{$json.step || 'unknown'}} error={{ JSON.stringify($json.error || $json).slice(0,500) }}\"\n  }\n}",
+        "jsonBody": "={\n  \"msg_type\": \"text\",\n  \"content\": {\n    \"text\": \"[ALERT] image-pipeline run failed. run_id={{ $('写入生成批次').item.json.id }} step={{$json.step || 'unknown'}} error={{ JSON.stringify($json.error || $json).slice(0,500) }}\"\n  }\n}",
         "options": {
           "timeout": 15000
         }
       },
       "id": "a1f2c3d4-1117-4017-8117-111111111117",
-      "name": "Feishu · Alert error",
+      "name": "飞书错误告警",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [600, 240]
+      "position": [
+        600,
+        240
+      ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
         "query": "WITH counts AS (SELECT gr.id AS run_id, gr.task_id, t.requested_count, COUNT(c.id) FILTER (WHERE c.status != 'failed') AS ok_count FROM generation_runs gr JOIN tasks t ON t.id = gr.task_id LEFT JOIN candidates c ON c.run_id = gr.id WHERE gr.id = $1::uuid GROUP BY gr.id, gr.task_id, t.requested_count), updated_run AS (UPDATE generation_runs gr SET status = (CASE WHEN counts.ok_count >= counts.requested_count THEN 'succeeded' WHEN counts.ok_count > 0 THEN 'partial' ELSE 'failed' END)::run_status, finished_at = now() FROM counts WHERE gr.id = counts.run_id RETURNING gr.task_id, gr.status), updated_task AS (UPDATE tasks t SET status = (CASE WHEN updated_run.status IN ('succeeded','partial') THEN 'candidates_ready' ELSE 'failed_recoverable' END)::task_status, finished_at = CASE WHEN updated_run.status = 'succeeded' THEN now() ELSE t.finished_at END, updated_at = now() FROM updated_run WHERE t.id = updated_run.task_id RETURNING t.status) SELECT status FROM updated_run;",
         "options": {
-          "queryReplacement": "={{ [$('Postgres · Insert generation_run').item.json.id] }}"
+          "queryReplacement": "={{ [$('写入生成批次').item.json.id] }}"
         }
       },
       "id": "a1f2c3d4-1118-4018-8118-111111111118",
-      "name": "Postgres · Finalize run status",
+      "name": "汇总批次状态",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.5,
-      "position": [1480, -120],
+      "position": [
+        1480,
+        -120
+      ],
       "credentials": {
         "postgres": {
           "id": "cred-pg-content-factory",
@@ -397,137 +478,214 @@
     {
       "parameters": {},
       "id": "a1f2c3d4-1119-4019-8119-111111111119",
-      "name": "NoOp · async final marker",
+      "name": "异步结束标记",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [1700, -120]
+      "position": [
+        1700,
+        -120
+      ]
     }
   ],
   "connections": {
-    "Webhook · /trigger/image": {
+    "触发器 /trigger/image": {
       "main": [
         [
-          { "node": "Postgres · Load product+style", "type": "main", "index": 0 }
+          {
+            "node": "读取商品与风格",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Postgres · Load product+style": {
+    "读取商品与风格": {
       "main": [
         [
-          { "node": "Postgres · Insert generation_run", "type": "main", "index": 0 }
+          {
+            "node": "写入生成批次",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Postgres · Insert generation_run": {
+    "写入生成批次": {
       "main": [
         [
-          { "node": "LLM · Selling points (5dock)", "type": "main", "index": 0 }
+          {
+            "node": "提炼卖点（LLM Provider）",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "LLM · Selling points (5dock)": {
+    "提炼卖点（LLM Provider）": {
       "main": [
         [
-          { "node": "LLM · Build 11 prompts (5dock)", "type": "main", "index": 0 }
+          {
+            "node": "生成 11 条提示词（LLM Provider）",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "LLM · Build 11 prompts (5dock)": {
+    "生成 11 条提示词（LLM Provider）": {
       "main": [
         [
-          { "node": "Code · Explode prompts", "type": "main", "index": 0 }
+          {
+            "node": "拆分提示词清单",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Code · Explode prompts": {
+    "拆分提示词清单": {
       "main": [
         [
-          { "node": "Split In Batches · 4 concurrent", "type": "main", "index": 0 }
+          {
+            "node": "分批并发（4 路）",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Split In Batches · 4 concurrent": {
+    "分批并发（4 路）": {
       "main": [
         [
-          { "node": "Seedream · Generate image", "type": "main", "index": 0 }
+          {
+            "node": "汇总批次状态",
+            "type": "main",
+            "index": 0
+          }
         ],
         [
-          { "node": "Postgres · Finalize run status", "type": "main", "index": 0 }
+          {
+            "node": "调用图片 Provider 生图",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Seedream · Generate image": {
+    "调用图片 Provider 生图": {
       "main": [
         [
-          { "node": "HTTP · Download generated image", "type": "main", "index": 0 }
-        ]
-      ],
-      "error": [
+          {
+            "node": "生成 OSS 路径与元数据",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
-          { "node": "Postgres · Mark run failed", "type": "main", "index": 0 }
-        ]
-      ]
-    },
-    "HTTP · Download generated image": {
-      "main": [
-        [
-          { "node": "Code · Compute OSS key + metadata", "type": "main", "index": 0 }
-        ]
-      ]
-    },
-    "Code · Compute OSS key + metadata": {
-      "main": [
-        [
-          { "node": "OSS · Upload PNG", "type": "main", "index": 0 }
+          {
+            "node": "标记批次失败",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "OSS · Upload PNG": {
+    "下载生成图片": {
       "main": [
         [
-          { "node": "Postgres · Insert candidate", "type": "main", "index": 0 }
+          {
+            "node": "生成 OSS 路径与元数据",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Postgres · Insert candidate": {
+    "生成 OSS 路径与元数据": {
       "main": [
         [
-          { "node": "Feishu · Bitable add review row", "type": "main", "index": 0 }
+          {
+            "node": "写入候选图记录",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Feishu · Bitable add review row": {
+    "上传 PNG 到 OSS": {
       "main": [
         [
-          { "node": "Feishu · Notify reviewer", "type": "main", "index": 0 }
+          {
+            "node": "写入候选图记录",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Feishu · Notify reviewer": {
+    "写入候选图记录": {
       "main": [
         [
-          { "node": "Wait · slot before next batch", "type": "main", "index": 0 }
+          {
+            "node": "等待下一批次空位",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Wait · slot before next batch": {
+    "写入飞书审核表": {
       "main": [
         [
-          { "node": "Split In Batches · 4 concurrent", "type": "main", "index": 0 }
+          {
+            "node": "通知审核人",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Postgres · Mark run failed": {
+    "通知审核人": {
       "main": [
         [
-          { "node": "Feishu · Alert error", "type": "main", "index": 0 }
+          {
+            "node": "等待下一批次空位",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
-    "Postgres · Finalize run status": {
+    "等待下一批次空位": {
       "main": [
         [
-          { "node": "NoOp · async final marker", "type": "main", "index": 0 }
+          {
+            "node": "分批并发（4 路）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "标记批次失败": {
+      "main": [
+        [
+          {
+            "node": "飞书错误告警",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "汇总批次状态": {
+      "main": [
+        [
+          {
+            "node": "异步结束标记",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     }
@@ -541,9 +699,15 @@
   },
   "staticData": null,
   "tags": [
-    { "name": "content-factory" },
-    { "name": "image-pipeline" },
-    { "name": "yfn" }
+    {
+      "name": "content-factory"
+    },
+    {
+      "name": "image-pipeline"
+    },
+    {
+      "name": "yfn"
+    }
   ],
   "triggerCount": 1,
   "versionId": "v1.0.0-2026-05-05",

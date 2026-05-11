@@ -4,7 +4,7 @@
 # 用法：
 #   cp .env.example .env.local
 #   # 编辑 .env.local：只需要填 POSTGRES_PASSWORD / N8N_ENCRYPTION_KEY / REDIS_PASSWORD
-#   #                  / ARK_API_KEY / NEWAPI_KEY，其他保留默认或 "local-dev"
+#   #                  / LLM_API_KEY / IMAGE_API_KEY / VIDEO_API_KEY，其他保留默认
 #   docker compose -f docker-compose.local.yml --env-file .env.local up -d
 #
 # 访问：
@@ -123,13 +123,36 @@ services:
       # ---- 用户管理 ----
       N8N_USER_MANAGEMENT_DISABLED: "false"
       N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       # ---- 日志 ----
       N8N_LOG_LEVEL: info
-      # ---- 本地演示：API key 可留空，不影响 N8N 启动 ----
+      # ---- 本地演示：Provider key 可留空，不影响 N8N 启动 ----
+      PAC_PROFILE: ${PAC_PROFILE:-cn_ecommerce_default}
+      LLM_PROVIDER: ${LLM_PROVIDER:-5dock}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://5dock.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-5-20250929}
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
+      MEDIA_API_KEY: ${MEDIA_API_KEY:-}
+      IMAGE_PROVIDER: ${IMAGE_PROVIDER:-volcengine_ark}
+      IMAGE_BASE_URL: ${IMAGE_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      IMAGE_API_KEY: ${IMAGE_API_KEY:-}
+      IMAGE_MODEL: ${IMAGE_MODEL:-doubao-seedream-4-0-250828}
+      VIDEO_PROVIDER: ${VIDEO_PROVIDER:-volcengine_ark}
+      VIDEO_BASE_URL: ${VIDEO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
+      VIDEO_API_KEY: ${VIDEO_API_KEY:-}
+      VIDEO_MODEL: ${VIDEO_MODEL:-doubao-seedance-1-0-pro-250528}
+      ASR_PROVIDER: ${ASR_PROVIDER:-volcengine}
+      ASR_BASE_URL: ${ASR_BASE_URL:-https://openspeech.bytedance.com/api/v1/auc}
+      ASR_API_KEY: ${ASR_API_KEY:-}
+      ASR_MODEL: ${ASR_MODEL:-volc_auc_common}
+      # ---- 旧字段兼容 ----
       NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:-https://5dock.com/v1}
       NEWAPI_KEY: ${NEWAPI_KEY:-}
       ARK_API_KEY: ${ARK_API_KEY:-}
       ARK_ENDPOINT: ${ARK_ENDPOINT:-https://ark.cn-beijing.volces.com/api/v3}
+      ARK_IMAGE_MODEL: ${ARK_IMAGE_MODEL:-doubao-seedream-4-0-250828}
+      ARK_VIDEO_MODEL: ${ARK_VIDEO_MODEL:-doubao-seedance-1-0-pro-250528}
       FEISHU_APP_ID: ${FEISHU_APP_ID:-}
       FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
       FEISHU_BITABLE_TOKEN: ${FEISHU_BITABLE_TOKEN:-}

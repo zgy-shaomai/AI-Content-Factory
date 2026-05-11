@@ -25,15 +25,27 @@ set -uo pipefail
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; NC=$'\033[0m'
 
 # 兜底从 deploy/.env.local 读
-if [[ -f "deploy/.env.local" ]] && [[ -z "${ARK_API_KEY:-}" ]]; then
+if [[ -f "deploy/.env.local" ]] && [[ -z "${IMAGE_API_KEY:-}" || -z "${VIDEO_API_KEY:-}" ]]; then
     set -o allexport
     # shellcheck source=/dev/null
     source deploy/.env.local
     set +o allexport
 fi
 
-if [[ -z "${ARK_API_KEY:-}" ]] || [[ "$ARK_API_KEY" == CHANGE_ME* ]]; then
-    echo "${RED}❌ ARK_API_KEY 没设${NC}"
+IMAGE_API_KEY="${IMAGE_API_KEY:-${MEDIA_API_KEY:-${ARK_API_KEY:-}}}"
+VIDEO_API_KEY="${VIDEO_API_KEY:-${MEDIA_API_KEY:-${ARK_API_KEY:-}}}"
+IMAGE_BASE_URL="${IMAGE_BASE_URL:-${MEDIA_BASE_URL:-${ARK_ENDPOINT:-https://ark.cn-beijing.volces.com/api/v3}}}"
+VIDEO_BASE_URL="${VIDEO_BASE_URL:-${MEDIA_BASE_URL:-${ARK_ENDPOINT:-https://ark.cn-beijing.volces.com/api/v3}}}"
+IMAGE_MODEL="${IMAGE_MODEL:-${ARK_IMAGE_MODEL:-doubao-seedream-4-0-250828}}"
+VIDEO_MODEL="${VIDEO_MODEL:-${ARK_VIDEO_MODEL:-doubao-seedance-1-0-pro-250528}}"
+export IMAGE_MODEL VIDEO_MODEL
+
+if [[ -z "${IMAGE_API_KEY:-}" ]] || [[ "$IMAGE_API_KEY" == CHANGE_ME* ]]; then
+    echo "${RED}❌ IMAGE_API_KEY/MEDIA_API_KEY 没设${NC}"
+    exit 1
+fi
+if [[ -z "${VIDEO_API_KEY:-}" ]] || [[ "$VIDEO_API_KEY" == CHANGE_ME* ]]; then
+    echo "${RED}❌ VIDEO_API_KEY/MEDIA_API_KEY 没设${NC}"
     exit 1
 fi
 
@@ -65,10 +77,10 @@ for i in "${!IMAGE_PROMPTS[@]}"; do
 
     echo -ne "${YLW}  [$((i+1))/11] ${name}...${NC} "
 
-    RESP=$(curl -sS -X POST https://ark.cn-beijing.volces.com/api/v3/images/generations \
-        -H "Authorization: Bearer ${ARK_API_KEY}" \
+    RESP=$(curl -sS -X POST "${IMAGE_BASE_URL%/}/images/generations" \
+        -H "Authorization: Bearer ${IMAGE_API_KEY}" \
         -H "Content-Type: application/json" \
-        -d "$(python3 -c "import json,sys; print(json.dumps({'model':'doubao-seedream-4-0-250828','prompt':sys.argv[1],'size':'1024x1024','watermark':False}))" "$prompt")" 2>&1)
+        -d "$(python3 -c "import json,sys,os; print(json.dumps({'model':os.environ.get('IMAGE_MODEL'),'prompt':sys.argv[1],'size':'1024x1024','watermark':False}))" "$prompt")" 2>&1)
 
     URL=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',[{}])[0].get('url',''))" 2>/dev/null || echo "")
 
@@ -95,10 +107,10 @@ echo "${YLW}  ⓘ 视频通常要 90-180 秒生成，请耐心等${NC}"
 
 VIDEO_PROMPT='4-shot edit (3 seconds each) of a 28-year-old asian woman wearing matte black sports bra with front zipper. Shot 1: she pulls back her hair confidently, soft window light. Shot 2: close-up of her hand pulling the chrome zipper down 3cm to reveal breathable mesh inner. Shot 3: she does jumping jacks in slow motion at low angle, fabric showing high elasticity, no breast bounce. Shot 4: she faces camera, zips up, smiles slightly, end frame on a clean centered product reveal. Cinematic professional fashion photography aesthetic. Voiceover: "试过才懂. 前拉链, 三秒上身. 跑跳不晃, 一秒速干. 黑色M码, 主页下单." --resolution 720p --ratio 9:16 --duration 12 --fps 24 --watermark false'
 
-VR=$(curl -sS -X POST https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks \
-    -H "Authorization: Bearer ${ARK_API_KEY}" \
+VR=$(curl -sS -X POST "${VIDEO_BASE_URL%/}/contents/generations/tasks" \
+    -H "Authorization: Bearer ${VIDEO_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "$(python3 -c "import json,sys; print(json.dumps({'model':'doubao-seedance-1-0-pro-250528','content':[{'type':'text','text':sys.argv[1]}]}))" "$VIDEO_PROMPT")" 2>&1)
+    -d "$(python3 -c "import json,sys,os; print(json.dumps({'model':os.environ.get('VIDEO_MODEL'),'content':[{'type':'text','text':sys.argv[1]}]}))" "$VIDEO_PROMPT")" 2>&1)
 
 VTASK=$(echo "$VR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || echo "")
 
@@ -109,8 +121,8 @@ else
     echo -ne "${YLW}  轮询任务状态...${NC}"
     for i in $(seq 1 60); do
         sleep 5
-        VR2=$(curl -sS -H "Authorization: Bearer ${ARK_API_KEY}" \
-            "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/$VTASK" 2>&1)
+        VR2=$(curl -sS -H "Authorization: Bearer ${VIDEO_API_KEY}" \
+            "${VIDEO_BASE_URL%/}/contents/generations/tasks/$VTASK" 2>&1)
         ST=$(echo "$VR2" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null || echo "")
         echo -ne "."
         if [[ "$ST" == "succeeded" ]]; then

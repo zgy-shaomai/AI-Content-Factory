@@ -60,17 +60,30 @@ function Get-HttpErrorBody($ErrorRecord) {
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $EnvValues = Read-EnvFile (Join-Path $ScriptDir '..\deploy\.env.local')
 
-$ArkKey = Get-Setting $EnvValues 'ARK_API_KEY' ''
-$NewApiKey = Get-Setting $EnvValues 'NEWAPI_KEY' ''
-$ArkBase = Get-Setting $EnvValues 'ARK_ENDPOINT' 'https://ark.cn-beijing.volces.com/api/v3'
-$NewApiBase = Get-Setting $EnvValues 'NEWAPI_BASE_URL' 'https://5dock.com/v1'
+$MediaKey = Get-Setting $EnvValues 'MEDIA_API_KEY' ''
+$MediaBase = Get-Setting $EnvValues 'MEDIA_BASE_URL' ''
+$DefaultMediaOrArkKey = if ($MediaKey) { $MediaKey } else { Get-Setting $EnvValues 'ARK_API_KEY' '' }
+$DefaultMediaOrArkBase = if ($MediaBase) { $MediaBase } else { Get-Setting $EnvValues 'ARK_ENDPOINT' 'https://ark.cn-beijing.volces.com/api/v3' }
+$ImageKey = Get-Setting $EnvValues 'IMAGE_API_KEY' $DefaultMediaOrArkKey
+$VideoKey = Get-Setting $EnvValues 'VIDEO_API_KEY' $DefaultMediaOrArkKey
+$LlmKey = Get-Setting $EnvValues 'LLM_API_KEY' (Get-Setting $EnvValues 'NEWAPI_KEY' '')
+$ImageBase = Get-Setting $EnvValues 'IMAGE_BASE_URL' $DefaultMediaOrArkBase
+$VideoBase = Get-Setting $EnvValues 'VIDEO_BASE_URL' $DefaultMediaOrArkBase
+$LlmBase = Get-Setting $EnvValues 'LLM_BASE_URL' (Get-Setting $EnvValues 'NEWAPI_BASE_URL' 'https://5dock.com/v1')
+$ImageModel = Get-Setting $EnvValues 'IMAGE_MODEL' (Get-Setting $EnvValues 'ARK_IMAGE_MODEL' 'doubao-seedream-4-0-250828')
+$VideoModel = Get-Setting $EnvValues 'VIDEO_MODEL' (Get-Setting $EnvValues 'ARK_VIDEO_MODEL' 'doubao-seedance-1-0-pro-250528')
+$LlmModel = Get-Setting $EnvValues 'LLM_MODEL' 'claude-sonnet-4-5-20250929'
 
-if ([string]::IsNullOrWhiteSpace($ArkKey) -or $ArkKey.StartsWith('CHANGE_ME')) {
-    Write-Host 'ERROR: ARK_API_KEY is missing. Set it in deploy/.env.local or the process environment.' -ForegroundColor Red
+if ([string]::IsNullOrWhiteSpace($ImageKey) -or $ImageKey.StartsWith('CHANGE_ME')) {
+    Write-Host 'ERROR: IMAGE_API_KEY/MEDIA_API_KEY is missing. Set it in deploy/.env.local or Provider Access Center.' -ForegroundColor Red
     exit 1
 }
-if ([string]::IsNullOrWhiteSpace($NewApiKey) -or $NewApiKey.StartsWith('CHANGE_ME')) {
-    Write-Host 'ERROR: NEWAPI_KEY is missing. Set it in deploy/.env.local or the process environment.' -ForegroundColor Red
+if ([string]::IsNullOrWhiteSpace($VideoKey) -or $VideoKey.StartsWith('CHANGE_ME')) {
+    Write-Host 'ERROR: VIDEO_API_KEY/MEDIA_API_KEY is missing. Set it in deploy/.env.local or Provider Access Center.' -ForegroundColor Red
+    exit 1
+}
+if ([string]::IsNullOrWhiteSpace($LlmKey) -or $LlmKey.StartsWith('CHANGE_ME')) {
+    Write-Host 'ERROR: LLM_API_KEY/NEWAPI_KEY is missing. Set it in deploy/.env.local or Provider Access Center.' -ForegroundColor Red
     exit 1
 }
 
@@ -80,12 +93,12 @@ $Fail = 0
 Write-Host 'STEP [1/3] Seedream 4.0 image test...' -ForegroundColor Yellow
 try {
     $Body = @{
-        model = 'doubao-seedream-4-0-250828'
+        model = $ImageModel
         prompt = 'studio shot of a black sports bra with front zipper, on minimalist gray background, soft natural light, fashion photography, ultra detailed'
         size = '1024x1024'
         watermark = $false
     } | ConvertTo-Json -Depth 8
-    $Resp = Invoke-RestMethod -Method Post -Uri "$ArkBase/images/generations" -Headers @{ Authorization = "Bearer $ArkKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
+    $Resp = Invoke-RestMethod -Method Post -Uri "$ImageBase/images/generations" -Headers @{ Authorization = "Bearer $ImageKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
     $Url = $Resp.data[0].url
     if ($Url) {
         Write-Host "  OK image generation succeeded: $Url" -ForegroundColor Green
@@ -106,7 +119,7 @@ try {
 Write-Host 'STEP [2/3] Seedance 2.0 submit test...' -ForegroundColor Yellow
 try {
     $Body = @{
-        model = 'doubao-seedance-1-0-pro-250528'
+        model = $VideoModel
         content = @(
             @{
                 type = 'text'
@@ -114,7 +127,7 @@ try {
             }
         )
     } | ConvertTo-Json -Depth 10
-    $Resp = Invoke-RestMethod -Method Post -Uri "$ArkBase/contents/generations/tasks" -Headers @{ Authorization = "Bearer $ArkKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
+    $Resp = Invoke-RestMethod -Method Post -Uri "$VideoBase/contents/generations/tasks" -Headers @{ Authorization = "Bearer $VideoKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
     $TaskId = $Resp.id
     if ($TaskId) {
         Write-Host "  OK video task submitted: task_id=$TaskId" -ForegroundColor Green
@@ -133,10 +146,10 @@ try {
     $Fail++
 }
 
-Write-Host 'STEP [3/3] 5dock NewAPI Claude test...' -ForegroundColor Yellow
+Write-Host 'STEP [3/3] LLM provider chat/completions test...' -ForegroundColor Yellow
 try {
     $Body = @{
-        model = 'claude-sonnet-4-5-20250929'
+        model = $LlmModel
         messages = @(
             @{
                 role = 'user'
@@ -145,18 +158,18 @@ try {
         )
         max_tokens = 10
     } | ConvertTo-Json -Depth 10
-    $Resp = Invoke-RestMethod -Method Post -Uri "$NewApiBase/chat/completions" -Headers @{ Authorization = "Bearer $NewApiKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
+    $Resp = Invoke-RestMethod -Method Post -Uri "$LlmBase/chat/completions" -Headers @{ Authorization = "Bearer $LlmKey" } -ContentType 'application/json' -Body $Body -TimeoutSec 60
     $Text = $Resp.choices[0].message.content
     if ($Text) {
-        Write-Host "  OK Claude response: $Text" -ForegroundColor Green
+        Write-Host "  OK LLM response: $Text" -ForegroundColor Green
         $Pass++
     } else {
-        Write-Host '  ERROR Claude call failed: no text in response' -ForegroundColor Red
+        Write-Host '  ERROR LLM call failed: no text in response' -ForegroundColor Red
         $Fail++
     }
 } catch {
     $BodyText = Get-HttpErrorBody $_
-    Write-Host "  ERROR Claude call failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  ERROR LLM call failed: $($_.Exception.Message)" -ForegroundColor Red
     if ($BodyText) {
         Write-Host ("  Response: " + $BodyText.Substring(0, [Math]::Min(500, $BodyText.Length)))
     }
@@ -171,6 +184,6 @@ if ($Fail -eq 0) {
 }
 
 Write-Host "ERROR: $Fail/3 checks failed. Fix them before the demo." -ForegroundColor Red
-Write-Host '  Seedream/Seedance failure -> check ARK API key, quota, and whether the Seedance model is activated in Ark Console'
-Write-Host '  Claude failure -> check the 5dock NewAPI key and vip grouping'
+Write-Host '  Image/video failure -> check provider key, quota, endpoint, model activation, and whether the media API is Ark-compatible'
+Write-Host '  LLM failure -> check LLM_BASE_URL / LLM_API_KEY / LLM_MODEL for the selected provider'
 exit 1

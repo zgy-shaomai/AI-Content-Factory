@@ -73,8 +73,12 @@ foreach ($name in @('POSTGRES_PASSWORD', 'N8N_ENCRYPTION_KEY', 'REDIS_PASSWORD')
     }
 }
 
-foreach ($name in @('ARK_API_KEY', 'NEWAPI_KEY')) {
-    $value = Get-Setting $EnvValues $name ''
+foreach ($name in @('LLM_API_KEY', 'IMAGE_API_KEY', 'VIDEO_API_KEY')) {
+    $fallback = ''
+    if ($name -eq 'LLM_API_KEY') { $fallback = Get-Setting $EnvValues 'NEWAPI_KEY' '' }
+    if ($name -eq 'IMAGE_API_KEY') { $fallback = Get-Setting $EnvValues 'MEDIA_API_KEY' (Get-Setting $EnvValues 'ARK_API_KEY' '') }
+    if ($name -eq 'VIDEO_API_KEY') { $fallback = Get-Setting $EnvValues 'MEDIA_API_KEY' (Get-Setting $EnvValues 'ARK_API_KEY' '') }
+    $value = Get-Setting $EnvValues $name $fallback
     if ([string]::IsNullOrWhiteSpace($value) -or $value.StartsWith('CHANGE_ME')) {
         Write-Host "WARN: $name is empty. Stack can start, but N8N model calls will return 401." -ForegroundColor Yellow
     }
