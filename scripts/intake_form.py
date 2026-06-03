@@ -1,5 +1,5 @@
 """
-内容工厂 v3 · SaaS 级 UI（演示用）
+内容工厂 v3 · 本地联调界面
 访问 http://localhost:5001
 """
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -25,8 +25,8 @@ PORT = 5001
 PG_CONTAINER = "cf-postgres-local"
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 EXTERNAL_TASK_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
-VIDEO_DIR = Path(__file__).parent.parent / "_demo_seed" / "videos"
-AUDIO_DIR = Path(__file__).parent.parent / "_demo_seed" / "audio"
+VIDEO_DIR = Path(__file__).parent.parent / "_seed_assets" / "videos"
+AUDIO_DIR = Path(__file__).parent.parent / "_seed_assets" / "audio"
 ROOT_DIR = Path(__file__).parent.parent
 ENV_LOCAL_PATH = ROOT_DIR / "deploy" / ".env.local"
 ENV_LOCAL_EXAMPLE_PATH = ROOT_DIR / "deploy" / ".env.local.example"

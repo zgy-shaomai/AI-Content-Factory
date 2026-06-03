@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generate 11 Seedream 4.0 demo images for YN-BRA-001 sportswear demo.
+Generate 11 Seedream 4.0 seed images for YN-BRA-001.
 Sequential calls to avoid RPM limits (~30s per image, ~5-8 min total).
 """
 import json
@@ -18,7 +18,7 @@ API_BASE = (os.environ.get("IMAGE_BASE_URL") or os.environ.get("MEDIA_BASE_URL")
 API_URL = f"{API_BASE}/images/generations"
 MODEL = os.environ.get("IMAGE_MODEL") or os.environ.get("ARK_IMAGE_MODEL") or "doubao-seedream-4-0-250828"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "_demo_seed", "images")
+OUT_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "_seed_assets", "images")
 NEGATIVE_PROMPT = (
     "third-party brand logo, unauthorized trademark, unauthorized wordmark, Nike, Nike Swoosh, "
     "Li-Ning, 李宁, adidas, three stripes, Puma, Under Armour, Lululemon, Anta, Jordan, "
@@ -133,7 +133,7 @@ def main() -> int:
     # final dir count
     try:
         files = [f for f in os.listdir(OUT_DIR) if f.lower().endswith(".png")]
-        print(f"_demo_seed/images/ contains {len(files)} PNG files")
+        print(f"_seed_assets/images/ contains {len(files)} PNG files")
     except Exception as e:
         print(f"could not list output dir: {e}")
     return 0 if success == 11 else 1

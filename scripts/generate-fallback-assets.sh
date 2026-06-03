@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 备份素材生成器：演示前 1 小时跑一次，万一现场 API 翻车就用这堆
+# 备份素材生成器：生成一组本地兜底素材
 # =============================================================================
 # 产物：
-#   _demo_seed/
+#   _seed_assets/
 #     ├── images/
 #     │    ├── 01-studio-front.png      （白底正面）
 #     │    ├── 02-studio-side.png       （白底侧面）
@@ -49,7 +49,7 @@ if [[ -z "${VIDEO_API_KEY:-}" ]] || [[ "$VIDEO_API_KEY" == CHANGE_ME* ]]; then
     exit 1
 fi
 
-mkdir -p _demo_seed/images _demo_seed/videos
+mkdir -p _seed_assets/images _seed_assets/videos
 
 # ---------- 11 张图的 prompt（YN-BRA-001 实战版，从 prompts/image/03/04 抽）----------
 declare -a IMAGE_PROMPTS=(
@@ -73,7 +73,7 @@ for i in "${!IMAGE_PROMPTS[@]}"; do
     line="${IMAGE_PROMPTS[$i]}"
     name="${line%%|*}"
     prompt="${line#*|}"
-    out="_demo_seed/images/${name}.png"
+    out="_seed_assets/images/${name}.png"
 
     echo -ne "${YLW}  [$((i+1))/11] ${name}...${NC} "
 
@@ -130,8 +130,8 @@ else
             if [[ -n "$VURL" ]]; then
                 echo
                 echo -ne "${YLW}  下载视频...${NC} "
-                if curl -sSL "$VURL" -o "_demo_seed/videos/yn-bra-001-12s.mp4" --max-time 120; then
-                    SZ=$(wc -c < "_demo_seed/videos/yn-bra-001-12s.mp4")
+                if curl -sSL "$VURL" -o "_seed_assets/videos/yn-bra-001-12s.mp4" --max-time 120; then
+                    SZ=$(wc -c < "_seed_assets/videos/yn-bra-001-12s.mp4")
                     echo "${GRN}✅ ${SZ}B${NC}"
                     MANIFEST+="{\"name\":\"yn-bra-001-12s\",\"task_id\":\"$VTASK\",\"url\":\"$VURL\",\"file\":\"videos/yn-bra-001-12s.mp4\",\"size\":$SZ}"
                 fi
@@ -148,12 +148,12 @@ fi
 # ---------- manifest ----------
 MANIFEST="${MANIFEST%,}"
 MANIFEST+="]"
-echo "$MANIFEST" | python3 -c "import sys,json; print(json.dumps(json.loads(sys.stdin.read()), ensure_ascii=False, indent=2))" > _demo_seed/manifest.json 2>/dev/null || echo "$MANIFEST" > _demo_seed/manifest.json
+echo "$MANIFEST" | python3 -c "import sys,json; print(json.dumps(json.loads(sys.stdin.read()), ensure_ascii=False, indent=2))" > _seed_assets/manifest.json 2>/dev/null || echo "$MANIFEST" > _seed_assets/manifest.json
 
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-IMG_OK=$(ls _demo_seed/images/*.png 2>/dev/null | wc -l)
-VID_OK=$(ls _demo_seed/videos/*.mp4 2>/dev/null | wc -l)
+IMG_OK=$(ls _seed_assets/images/*.png 2>/dev/null | wc -l)
+VID_OK=$(ls _seed_assets/videos/*.mp4 2>/dev/null | wc -l)
 echo "${GRN}图片: ${IMG_OK}/11${NC}  ${GRN}视频: ${VID_OK}/1${NC}"
-echo "manifest: _demo_seed/manifest.json"
-[[ $IMG_OK -ge 8 && $VID_OK -ge 1 ]] && echo "${GRN}✅ 备份素材足够撑过演示翻车${NC}" || echo "${RED}⚠️  备份不够，建议重跑${NC}"
+echo "manifest: _seed_assets/manifest.json"
+[[ $IMG_OK -ge 8 && $VID_OK -ge 1 ]] && echo "${GRN}✅ 兜底素材已生成${NC}" || echo "${RED}⚠️  兜底素材不足，建议重跑${NC}"

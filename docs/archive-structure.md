@@ -1,10 +1,10 @@
 # 归档结构设计（Archive Structure）
 
-> 项目：服装电商 AI 内容工厂
+> 项目：AI 内容工厂
 > 媒体存储：阿里云 OSS
 > 元数据：PostgreSQL 16 · 表 `archive`
 > 文档版本：v1.0 · 2026-05-05
-> 样品 SKU：YN-BRA-001（黑色高弹速干运动内衣 / 前拉链款）
+> 基线 SKU：YN-BRA-001（黑色高弹速干运动内衣 / 前拉链款）
 
 ---
 
@@ -29,7 +29,7 @@
 | `yn-content-deliver-cn-hz` | 通过审核的最终交付物、客户交付包 zip | 私有 + 签名直链 | 华东 1 |
 
 命名规则：`{tenant}-content-{purpose}-cn-{region}`
-- `tenant`：客户简称小写（首期客户 = `yn`，意为 "YourName"，演示用占位）
+- `tenant`：客户简称小写（首期示例 = `yn`，意为 "YourName"）
 - `purpose`：`raw` / `work` / `deliver`
 - 区域后缀：`cn-hz`（华东 1 杭州）/ `cn-sh`（华东 2 上海）等
 
@@ -252,13 +252,3 @@ WHERE oss_bucket = 'yn-content-work-cn-hz'
 ```
 
 ---
-
-## 7. 演示中的归档讲解动线
-
-今天下午演示"归档 / 多产品复用讲解（16-20 分钟）"环节的操作：
-
-1. 打开 OSS 控制台 work bucket，路径走到 `yn/YN-BRA-001/T-.../R1/image/`，让客户看到 4 张候选图与缩略图分离。
-2. 切到 deliver bucket 的 `_delivered/` 目录，展示通过审核后的交付路径。
-3. 打开 Postgres 客户端（DBeaver / TablePlus），执行 §6.3 查询，演示"OSS 路径 ↔ DB 行"双向可查。
-4. 在飞书多维表点 `打交付包` 按钮（或演示已生成的交付 zip 直链）。
-5. 强调："换一个新 SKU `YN-LEG-002`，所有路径模板原封照搬，不需要改一行代码。" 这就是模板复用。

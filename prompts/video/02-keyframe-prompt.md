@@ -86,7 +86,7 @@ Input scene → Output prompt:
 
 > Asian female model, 27 years old, long ponytail, natural tan skin, athletic 168cm, wearing high-waist black yoga pants with hidden pocket on the right thigh, standing in front of a full-length mirror lifting her right knee at 90 degrees while pulling the waistband higher with her left hand, modern minimalist bedroom in soft morning light, full-body framing reflected in the mirror, 35mm lens, eye-level, 4500K window key from the left, editorial sportwear style, slight film grain, ultra-sharp fabric texture, shot on Sony FX3, 9:16 vertical, 720x1280, advertising grade --no extra fingers, deformed hands, watermark, text overlay, multiple subjects
 
-### Few-shot 2（家纺示例 — 演示风格转移）
+### Few-shot 2（家纺场景 — 风格迁移参考）
 
 > Cozy bedroom corner at golden hour, neatly made bed with waffle-weave duvet cover in oat color folded down to reveal the texture, ceramic table lamp on a walnut nightstand, single hardback book, no model, medium-wide static frame, 50mm lens, eye-level, 3200K warm tungsten lamp plus low-key 5500K window fill from the left, slight haze, editorial home-textile catalog, fine film grain, ultra-sharp waffle weave detail, shot on Sony FX3, 9:16 vertical, 720x1280, advertising grade --no people, watermark, text overlay, plastic textures
 
@@ -114,7 +114,7 @@ curl -X POST https://5dock.com/v1/chat/completions \
 curl -X POST https://ark.cn-beijing.volces.com/api/v3/images/generations \
   -H "Authorization: Bearer ${ARK_API_KEY}" \
   -d '{
-    "model": "doubao-seedream-4-0-250828",
+    "model": "doubao-seedream-4-0-250528",
     "prompt": "<上一步 LLM 返回的 prompt 字符串>",
     "size": "720x1280",
     "guidance_scale": 3,

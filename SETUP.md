@@ -1,203 +1,341 @@
-# 内容工厂 · 本地一键搭建（同事版）
+# 本地部署说明
 
-> 这份文档让你 30 分钟内在自己电脑上跑起来同款演示，体验"客户填表 → AI 出 11 张图 + 视频成片"完整流程。
+本文档用于说明如何在本地把 `AI-Content-Factory` 跑起来，并理解本地模式与服务器模式之间的差异。
 
----
+如果你只是想先把项目跑通，请完整看完本文档再执行命令。很多问题不是“代码坏了”，而是本地依赖、凭据或 n8n 初始化步骤漏了。
 
-## 你需要准备的东西（5 分钟）
+## 1. 本地模式的目标
 
-| 物料 | 哪里拿 | 必填 |
-|---|---|---|
-| **Docker Desktop** | https://www.docker.com/products/docker-desktop/ 装好启动 | ✅ |
-| **Python 3.10+** | https://www.python.org/ （Windows 装时勾 "Add to PATH"）| ✅ |
-| **火山引擎方舟 API Key** | https://console.volcengine.com/ark → 控制台 → API Key 管理 | ✅ |
-| **5dock NewAPI Key** | 找 Joshua 要 vip 分组的 sk-xxx | ✅ |
-| **PowerShell** | Windows 自带；本地启动可直接用新增 `.ps1` 脚本 | ✅ |
-| **WSL 或 Git Bash** | 只在你想继续跑旧版 `.sh` 脚本时需要 | 可选 |
+本地模式主要是为了做以下事情：
 
-> ⚠️ **火山方舟需要充值** —— 演示一次约 ¥3-5（图）+ ¥12（视频/条），充 50 元够你测三五轮
+1. 验证 Docker、Postgres、Redis、n8n 能否正常启动
+2. 验证 workflow 能否导入并触发
+3. 验证本地表单、数据库与 n8n 的联通
+4. 在不接完整线上环境的情况下先完成基础联调
 
----
+本地模式默认不追求 100% 复刻正式生产环境，因此会做一些简化：
 
-## 5 步起栈
+- 使用 `localhost` 访问
+- 不强依赖 HTTPS
+- 不强依赖域名
+- 可先不接飞书与 OSS
+- 允许保留一部分样例素材做回显
 
-### 1. 解压 + 进项目
+## 2. 前置依赖
 
-```bash
-# 把这个文件夹放任意路径（中文路径也行）
-cd /path/to/01-内容工厂项目
-```
+在开始前，请确保本机具备以下条件：
 
-### 2. 配环境变量
+- Docker Desktop
+- Python 3.10+
+- Git Bash 或 WSL
+- 能访问外部模型 API 的网络环境
+- 可用的 Volcengine Ark API Key
+- 可用的 NewAPI Key
+
+推荐额外准备：
+
+- 一个可用的终端环境
+- 一个可访问 `http://localhost:5678` 的浏览器
+- `openssl`，用于快速生成 `N8N_ENCRYPTION_KEY`
+
+## 3. 你会用到的主要文件
+
+本地启动时最关键的是这几个文件：
+
+| 文件 | 作用 |
+|---|---|
+| `deploy/.env.local.example` | 本地环境变量模板 |
+| `deploy/bootstrap-local.sh` | 本地一键起栈 |
+| `deploy/docker-compose.local.yml` | 本地 Docker 编排 |
+| `scripts/n8n_setup.py` | 初始化 n8n |
+| `scripts/intake_form.py` | 启动本地表单页 |
+| `scripts/dry-run.sh` | 验证图片链路是否跑通 |
+
+## 4. 第一步：配置环境变量
+
+先从模板复制一份本地环境变量文件：
 
 ```bash
 cp deploy/.env.local.example deploy/.env.local
 ```
 
-打开 `deploy/.env.local`：
+然后编辑 `deploy/.env.local`。
+
+至少要确认下面这些字段：
 
 ```env
-POSTGRES_PASSWORD=随便定一个，比如 cf_local_pwd
-N8N_ENCRYPTION_KEY=用下面命令生成 64 位 hex
-REDIS_PASSWORD=随便定，比如 cf_redis_pwd
-ARK_API_KEY=ark-你的火山方舟 key
-NEWAPI_KEY=sk-Joshua 给你的 5dock vip key
+POSTGRES_PASSWORD=
+N8N_ENCRYPTION_KEY=
+REDIS_PASSWORD=
+ARK_API_KEY=
+NEWAPI_KEY=
 ```
 
-说明：
-- `POSTGRES_PASSWORD` / `REDIS_PASSWORD` / `N8N_ENCRYPTION_KEY` 是本地起栈必填项。
-- 演示机可以先用示例密码；`N8N_ENCRYPTION_KEY` 生成后不要改，否则 N8N credentials 会失效。
-- 想让图片/视频真跑起来，再填 `ARK_API_KEY` 和 `NEWAPI_KEY`
+### 4.1 这几个变量分别干什么
 
-生成 N8N 加密 key：
+| 变量 | 作用 | 是否必须 |
+|---|---|---|
+| `POSTGRES_PASSWORD` | 本地 Postgres 密码 | 必须 |
+| `N8N_ENCRYPTION_KEY` | n8n 凭据加密密钥 | 必须 |
+| `REDIS_PASSWORD` | 本地 Redis 密码 | 必须 |
+| `ARK_API_KEY` | 图片/视频相关外部能力调用 | 建议填写 |
+| `NEWAPI_KEY` | LLM 或中转服务调用 | 建议填写 |
+
+### 4.2 如何生成 `N8N_ENCRYPTION_KEY`
+
+推荐直接使用：
+
 ```bash
-# Linux/Mac/WSL/Git Bash:
 openssl rand -hex 32
-# 或 Python:
-python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-### 3. 启 Docker Desktop（手动）
+注意：
 
-任务栏右下角小鲸鲸图标变绿。
+- 这个值一旦用于 n8n，就不要随便改
+- 如果你改了它，已有 credentials 可能失效
 
-### 4. 一键起栈
+## 5. 第二步：启动本地依赖
 
-PowerShell：
-```powershell
-.\deploy\bootstrap-local.ps1
-```
+执行：
 
-如果你还保留 bash 环境，也可以继续用：
 ```bash
 bash deploy/bootstrap-local.sh
 ```
 
-期望看到：
-```
-✅ .env.local 必填项都齐了
-✅ Docker 已启动
-✅ Postgres ready
-✅ schema 已部署，9 张表
-✅ run_status / candidate_status enum 都扩好了
-✅ N8N ready
-```
+这个脚本会做几件事：
 
-### 5. 配 N8N（一次性，约 5 分钟）
+1. 检查 `.env.local` 是否存在
+2. 检查关键变量是否已填写
+3. 检查 Docker 是否已启动
+4. 把数据库初始化脚本放到 `deploy/initdb/`
+5. 启动 Postgres、Redis、n8n
+6. 等待数据库和 n8n 健康检查通过
 
-打开浏览器 http://localhost:5678
+如果脚本顺利完成，说明本地容器基础环境已经正常。
 
-**5.1** 注册 owner 账号（邮箱随便填，密码自定，不会发验证邮件）
+## 6. 第三步：打开 n8n 并创建 API Key
 
-**5.2** 左下角头像 → Settings → n8n API → **Create an API key**（不要过期或 30 天都行）→ 复制 token
+启动后打开：
 
-**5.3** 跑配置脚本（任选一种方式传 token）：
+`http://localhost:5678`
+
+第一次进入时需要：
+
+1. 注册 owner 账号
+2. 进入头像菜单
+3. 打开 `Settings`
+4. 找到 `n8n API`
+5. 创建一个 API Key
+
+这个 token 稍后会给 `scripts/n8n_setup.py` 使用。
+
+## 7. 第四步：自动导入 workflow 和 credentials
+
+执行：
 
 ```bash
-# 方式 1: 命令行参数
-python scripts/n8n_setup.py --token=eyJhbG...你刚复制的token
-
-# 方式 2: 环境变量
-export N8N_API_TOKEN=eyJhbG...你刚复制的token   # Linux/Mac/WSL
-set N8N_API_TOKEN=eyJhbG...你刚复制的token       # Windows cmd
-$env:N8N_API_TOKEN="eyJhbG...你刚复制的token"    # PowerShell
-python scripts/n8n_setup.py
+python scripts/n8n_setup.py --token=<your_n8n_api_token>
 ```
 
-它会自动：
-- 创建 6 个 credential（postgres / 5dock / ARK / OSS / 飞书 / ASR）
-- import 两个 workflow（image + video）
-- 绑定 credential 到节点
-- 激活 image-workflow
+这个脚本会自动：
 
-期望末尾输出：`🟢 Active  ContentFactory · Image Pipeline (YN-BRA-001 baseline)`
+1. 读取 `deploy/.env.local`
+2. 创建本地使用的 credential
+3. 导入 `n8n/image-workflow.json`
+4. 导入 `n8n/video-workflow.json`
+5. patch 一部分 credential 引用
+6. 激活图片工作流
 
-### 6. 启录入表单（演示主入口）
+### 7.1 这个脚本为什么重要
 
-新开一个终端：
+如果你跳过这一步，常见结果会是：
+
+- workflow 虽然存在，但节点凭据全是空的
+- HTTP 请求节点报红
+- Postgres 节点无法连接
+- 本地触发后 workflow 根本跑不起来
+
+## 8. 第五步：启动本地表单页面
+
+执行：
+
 ```bash
 python scripts/intake_form.py
 ```
 
-浏览器打开 **http://localhost:5001** —— 看到 ContentFactory 顶栏和录入表单就 OK 了。
+然后访问：
 
-建议先做一轮最小前置检查，再开始演示：
+`http://localhost:5001`
 
-```powershell
-python -m py_compile scripts\intake_form.py scripts\n8n_setup.py scripts\quality_gate.py
-python scripts\quality_gate.py
-.\scripts\verify-apis.ps1
-docker exec cf-postgres-local psql -U postgres -d content_factory -c "select 1;"
+这个页面主要提供三类能力：
+
+1. 录入样例商品信息
+2. 触发任务
+3. 查看候选结果和样例视频
+
+它不是一个正式后台，而是一个方便联调的轻量入口。
+
+## 9. 第六步：验证整条链路
+
+如果页面能打开，不代表链路就一定完整可用。建议再跑一遍 dry-run：
+
+```bash
+bash scripts/dry-run.sh
 ```
 
+这个脚本会：
+
+1. 检查 n8n 和 Postgres 容器是否在跑
+2. 找一个可用图片任务
+3. 触发 image webhook
+4. 轮询数据库里的 candidates 变化
+5. 输出最终是否达到预期数量
+
+这是判断“系统到底通没通”的最快方式之一。
+
+## 10. 本地常用地址
+
+- `http://localhost:5678`：n8n 控制台
+- `http://localhost:5001`：本地录入表单
+- `localhost:55432`：Postgres 映射端口
+- `localhost:56379`：Redis 映射端口
+
+## 11. 本地常用命令
+
+### 11.1 启动本地环境
+
+```bash
+bash deploy/bootstrap-local.sh
+```
+
+### 11.2 重新初始化 n8n
+
+```bash
+python scripts/n8n_setup.py --token=<your_n8n_api_token>
+```
+
+### 11.3 启动本地表单
+
+```bash
+python scripts/intake_form.py
+```
+
+### 11.4 验证 API
+
+```bash
+bash scripts/verify-apis.sh
+```
+
+### 11.5 跑 dry-run
+
+```bash
+bash scripts/dry-run.sh
+```
+
+## 12. 常见问题排查
+
+### 12.1 `http://localhost:5678` 打不开
+
+优先检查：
+
+- Docker Desktop 是否已启动
+- `cf-n8n-local` 是否在运行
+- `docker ps` 是否能看到相关容器
+- `http://localhost:5678/healthz` 是否返回成功
+
+### 12.2 n8n 节点全部发红
+
+高概率原因：
+
+- 没执行 `scripts/n8n_setup.py`
+- API token 错误
+- `.env.local` 没填完整
+- credential 没创建成功
+
+先重新执行：
+
+```bash
+python scripts/n8n_setup.py --token=<your_n8n_api_token>
+```
+
+### 12.3 表单能打开，但点提交没有反应
+
+排查顺序建议：
+
+1. 看 `intake_form.py` 所在终端有没有报错
+2. 看 n8n 最近一次执行有没有触发
+3. 看 PostgreSQL 里是否有新任务
+4. 看 webhook 地址是否正确
+
+### 12.4 图片或视频不生成
+
+优先检查：
+
+- `ARK_API_KEY` 是否正确
+- `NEWAPI_KEY` 是否正确
+- 网络是否能访问外部 API
+- `scripts/verify-apis.sh` 是否通过
+
+### 12.5 5001 端口被占用
+
+Windows 下可以先查占用：
+
+```bash
+netstat -ano | findstr 5001
+```
+
+找到 PID 后再决定是否释放对应进程。
+
+### 12.6 数据库初始化异常
+
+优先检查：
+
+- `deploy/initdb/01-postgres-init.sql` 是否存在
+- PostgreSQL 日志是否有 SQL 错误
+- 数据库名、用户、密码是否与 compose 配置一致
+
+## 13. 本地模式与服务器模式的区别
+
+很多同学会在本地能跑通后，直接拿同样的理解去部署服务器，结果踩坑。主要差异在这里：
+
+| 项目 | 本地模式 | 服务器模式 |
+|---|---|---|
+| compose 文件 | `docker-compose.local.yml` | `docker-compose.yml` |
+| 域名 | 不需要 | 需要 |
+| HTTPS | 通常不配 | 通常要配 |
+| 反向代理 | 不需要 | 使用 Caddy |
+| 外部依赖 | 可部分留空 | 应完整接入 |
+| 用途 | 联调和验证 | 正式运行 |
+
+如果你已经完成本地联调，下一步建议去看：
+
+- `deploy/.env.example`
+- `deploy/docker-compose.yml`
+- `docs/architecture.md`
+
+## 14. 什么时候算本地环境“真的跑通了”
+
+建议同时满足下面几个条件：
+
+1. Docker 容器正常启动
+2. `http://localhost:5678` 可访问
+3. `scripts/n8n_setup.py` 执行成功
+4. `http://localhost:5001` 可访问
+5. `scripts/dry-run.sh` 返回成功
+
+只有“页面能打开”或者“容器能起来”都还不算真正跑通。
+
+## 15. 推荐的本地调试顺序
+
+如果你后面要继续改这个项目，建议按这个顺序调试：
+
+1. 先看 `README.md` 理解全貌
+2. 再按本文件把环境起起来
+3. 用 `n8n_setup.py` 恢复 workflow
+4. 用 `intake_form.py` 验证入口
+5. 用 `dry-run.sh` 验证图片链路
+6. 再根据需要深入看 `docs/` 和 `schemas/`
+
 ---
 
-## 完整演示流程（验证步骤）
-
-1. http://localhost:5001 → 点 [运动内衣 · 黑] 模板 chip → [开始生成]
-2. 跳到进度页，2-3 分钟看 11 张候选涨出来（其中 4 张可作为重点审核演示）
-3. **新任务**视频区是空状态 + 配置表单：
-   - 选首帧图（dropdown 或直接 hover 图卡点 [🎬]）
-   - 改 prompt
-   - 点 [🎬 提交生成视频成片]
-4. 等 90-180 秒（真调 Seedance image-to-video）
-5. 看真新视频出来 + 点 [🔊 旁白] 听神经声口播
-6. 浏览器开 http://localhost:5001/history 看历史卡片，点任意一张回看
-
----
-
-## 常见问题
-
-### Docker Desktop 启动报错 "filename, directory name, or volume label syntax is incorrect"
-这是 Docker Desktop 4.5x+ 的 zombie socket bug：
-1. 点 Quit
-2. 重命名文件夹：`mv ~/AppData/Local/Docker/run ~/AppData/Local/Docker/run.broken`
-3. 重启 Docker Desktop
-4. 还不行 → 重启 Windows
-
-### N8N 节点全部红色 ⚠️
-Credential ID 没绑上。重跑 `python scripts/n8n_setup.py`。
-
-### 想先验 API 是否可用
-PowerShell 直接跑：`.\scripts\verify-apis.ps1`
-
-### 候选图 0/11 一直涨不起来
-查 N8N 画布最近一次执行的红色节点。常见原因：
-- ARK_API_KEY 错 → curl 验证：`bash scripts/verify-apis.sh`
-- 5dock vip 分组没 claude-sonnet-4-5-20250929 → 找 Joshua 加
-- N8N 没 Active → 浏览器 N8N → 右上角开关
-
-### 视频生成 4 分钟还没好
-火山方舟高峰期常见。重新点 [🎬 提交生成视频成片] 重试。
-
-### 表单服务 5001 端口起不来
-端口被占。Windows: `netstat -ano | findstr 5001` 找 PID 然后 `taskkill /F /PID <pid>`
-
----
-
-## 文件说明
-
-| 文件 / 目录 | 用途 |
-|---|---|
-| `deploy/docker-compose.local.yml` | 本地版 docker-compose（无 Caddy）|
-| `deploy/.env.local.example` | 环境变量模板 |
-| `deploy/bootstrap-local.ps1` | Windows 原生本地起栈 |
-| `deploy/bootstrap-local.sh` | 一键起栈 |
-| `schemas/postgres-init.sql` | 数据库 schema + seed 数据 |
-| `n8n/image-workflow.json` | 图片链路 workflow（19 节点）|
-| `n8n/video-workflow.json` | 视频链路 workflow（27 节点）|
-| `prompts/` | LLM prompt 模板 |
-| `scripts/intake_form.py` | 录入表单 + 视频实时生成（端口 5001）|
-| `scripts/n8n_setup.py` | N8N credentials + workflow 自动配置 |
-| `scripts/verify-apis.ps1` | Windows 原生验证 ARK / NewAPI key |
-| `scripts/verify-apis.sh` | 验证 ARK / NewAPI key 通不通 |
-| `scripts/generate_seedream_images.py` | 单独生成 11 张兜底图 |
-| `scripts/generate_seedance_video.py` | 单独生成兜底视频 |
-| `_demo_seed/` | 预生成的兜底素材（图 + 视频 + 旁白音频）|
-| `docs/` | 架构 / SOW / 演示讲稿等设计文档 |
-
----
-
-## 卡住找谁
-
-Joshua（项目 owner）—— 微信问。
+本地环境跑通后，建议继续看 [docs/README.md](docs/README.md) 和 [schemas/README.md](schemas/README.md)。

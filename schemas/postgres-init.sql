@@ -1,5 +1,5 @@
 -- ============================================================================
--- 服装电商内容工厂 - PostgreSQL 16 初始化脚本
+-- AI 内容工厂 - PostgreSQL 16 初始化脚本
 -- ============================================================================
 -- 用途：完整建库脚本，包含 schema、枚举、表、索引、触发器、视图、seed 数据
 -- 部署：psql -h <host> -U <user> -d <db> -f postgres-init.sql
@@ -56,7 +56,6 @@ DO $$ BEGIN
         'queued',     -- 入队
         'running',    -- 调用中
         'succeeded',  -- 成功
-        'partial',    -- 部分成功（候选不足但已有可审核产物）
         'failed',     -- 失败
         'timeout',    -- 超时
         'cancelled'   -- 取消
@@ -67,11 +66,9 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN
     CREATE TYPE candidate_status AS ENUM (
         'new',        -- 新生成
-        'pending_review', -- 已写入候选池，等待审核工作台拾取
         'in_review',  -- 审核中
         'approved',   -- 通过
         'rejected',   -- 驳回
-        'failed',     -- 候选生成/落库失败
         'archived',   -- 已归档
         'discarded'   -- 已废弃
     );
@@ -432,8 +429,8 @@ SELECT
 FROM candidates c
 JOIN tasks t      ON t.id = c.task_id
 JOIN products p   ON p.id = t.product_id
-WHERE c.status IN ('new', 'pending_review', 'in_review')
-  AND t.status IN ('pending', 'generating', 'candidates_ready', 'reviewing')
+WHERE c.status IN ('new', 'in_review')
+  AND t.status IN ('candidates_ready', 'reviewing')
 ORDER BY t.priority DESC, c.created_at ASC;
 
 COMMENT ON VIEW v_pending_review IS '所有待审核的候选物，含产品和任务上下文';
@@ -614,9 +611,9 @@ VALUES (
     'image',
     'pending',
     'high',
-    'YN-BRA-001 首期图片打样：6 商品图 + 5 场景图',
-    11,
-    '{"resolution":"1024x1280","views":["front","side","back","fabric_detail","zipper_action","logo_detail"],"scenes":["yoga_studio","running_outdoor","gym","outdoor_street","beach"],"model_image":"sd-xl-1.0","model_text":"gpt-4o"}'::jsonb,
+    'YN-BRA-001 首期图片打样：白底图 + 4 场景图',
+    8,
+    '{"resolution":"1024x1280","views":["front","back","detail"],"scenes":["yoga_studio","running_outdoor","gym","outdoor_street"],"model_image":"sd-xl-1.0","model_text":"gpt-4o"}'::jsonb,
     'recXXXIMG001',
     '飞飞'
 ) ON CONFLICT (id) DO NOTHING;
@@ -667,9 +664,19 @@ BEGIN
 END $$;
 
 -- ============================================================================
--- 兼容层：老库如果先于本版本初始化，补齐正式契约里的 enum 值。
--- 新库在上面的 CREATE TYPE 已包含这些值；这里是幂等升级兜底。
+-- 兼容层：补 enum 值，让 N8N workflow 用到的状态字面量都合法
+-- workflow 用的 'partial'（run_status）和 'pending_review'/'failed'（candidate_status）
+-- 都不在原始 enum 里，这里补全（必须在重写 query 之前先扩 enum）
+-- 注意：ALTER TYPE ADD VALUE 不能在 transaction 块里跑，所以必须独立语句
 -- ============================================================================
-ALTER TYPE run_status ADD VALUE IF NOT EXISTS 'partial';
-ALTER TYPE candidate_status ADD VALUE IF NOT EXISTS 'pending_review';
-ALTER TYPE candidate_status ADD VALUE IF NOT EXISTS 'failed';
+DO $$ BEGIN
+    ALTER TYPE run_status ADD VALUE IF NOT EXISTS 'partial';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TYPE candidate_status ADD VALUE IF NOT EXISTS 'pending_review';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+    ALTER TYPE candidate_status ADD VALUE IF NOT EXISTS 'failed';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generate 1 Seedance 2.0 (doubao-seedance-1-0-pro) demo video for YN-BRA-001.
+Generate 1 Seedance 2.0 (doubao-seedance-1-0-pro) seed video for YN-BRA-001.
 
 Supports both text-to-video and image-to-video (first-frame) modes.
 
@@ -31,7 +31,7 @@ TASK_URL = f"{API_BASE}/contents/generations/tasks"
 MODEL = os.environ.get("VIDEO_MODEL") or os.environ.get("ARK_VIDEO_MODEL") or "doubao-seedance-1-0-pro-250528"
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_OUT_PATH = os.path.join(os.path.dirname(_SCRIPT_DIR), "_demo_seed", "videos", "yn-bra-001-12s.mp4")
+DEFAULT_OUT_PATH = os.path.join(os.path.dirname(_SCRIPT_DIR), "_seed_assets", "videos", "yn-bra-001-12s.mp4")
 
 DEFAULT_PROMPT = (
     "12 second TikTok style sportswear advertisement: 4 cuts (3 sec each). "

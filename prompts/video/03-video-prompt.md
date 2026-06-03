@@ -87,7 +87,7 @@ Output：
 模特从首帧的提膝半穿状态继续，右腿膝盖向胸口靠拢的同时左手将高腰宽边向上提合 3 厘米，腰部弹力面料自然回弹贴合腰线，整段动作 1.2 秒后立稳。镜头执行 推（缓），从全身镜面反射的中景推近至腰胯以上。晨光从左侧落地窗斜入，地板高光随推近收紧。warm 4500K window key, soft cool fill, fine film grain, editorial sportwear cinematic. <dialogue>穿对就赢</dialogue> --resolution 720p --ratio 9:16 --duration 3 --fps 24 --camera_fixed false --watermark false
 ```
 
-### Few-shot 2（家纺产品 — 静物推镜 · 演示风格转移）
+### Few-shot 2（家纺产品 — 静物推镜 · 风格迁移参考）
 
 ```
 画面从全景床品静态起始缓慢推近至枕角华夫格织物的特写，床单褶皱随推近一帧帧显出立体织纹，无人物。镜头执行 推（缓），保持水平不偏移。3200K 床头灯暖光为主，左侧晨光 5500K 透过纱帘补冷调，光比 4:1。home-textile editorial catalog, fine grain, ultra-sharp waffle weave detail. <dialogue>触感会说话</dialogue> --resolution 720p --ratio 9:16 --duration 3 --fps 24 --camera_fixed false --watermark false

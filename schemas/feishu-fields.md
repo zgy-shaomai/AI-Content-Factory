@@ -1,6 +1,6 @@
 # 飞书多维表字段规格
 
-> 服装电商内容工厂 - 飞书侧字段标准
+> AI 内容工厂 - 飞书侧字段标准
 > 版本：v1.0  日期：2026-05-05
 > 多维表 app_token：填入 `tenants.feishu_app_token`
 > 时区：Asia/Shanghai
@@ -94,7 +94,7 @@
 | 模型 | `model_name` | 单行文本 | 否 | - | `sd-xl-1.0` / `seedance-2.0` | N8N 写 / 客户读 |
 | 分辨率 | `resolution` | 单行文本 | 否 | - | `1024x1280` | N8N 写 / 客户读 |
 | 时长（秒） | `duration_s` | 数字 | 否 | - | `12`（视频） | N8N 写 / 客户读 |
-| 候选状态 | `status` | 单选 | 是 | `pending_review` | 选项：new / pending_review / in_review / approved / rejected / failed / archived / discarded | N8N 写 / 客户读 |
+| 候选状态 | `status` | 单选 | 是 | `new` | 选项：new / in_review / approved / rejected / archived / discarded | N8N 写 / 客户读 |
 | 审核动作 | `audit_action` | 单选 | 否 | - | 选项：通过 / 驳回 / 要求修改 / 仅评论 | 客户写 / N8N 读 |
 | 审核人 | `reviewer` | 单行文本 | 否 | 当前用户 | `飞飞` | 客户写 / N8N 读 |
 | 审核评分 | `score` | 数字 | 否 | - | `8.5`（0-10） | 客户写 / N8N 读 |

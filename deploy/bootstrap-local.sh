@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 本地演示一键起栈脚本
+# 本地一键起栈脚本
 # =============================================================================
 # 跑这个之前：
 #   1. Docker Desktop 已启动（右下角小鲸鱼变绿）
@@ -130,8 +130,8 @@ ${GRN}✅ 本地栈起完了${NC}
        n8n/image-workflow.json
        n8n/video-workflow.json
   5. 两个 workflow 都 Activate
-  6. 看一下 N8N OSS 节点：本地 demo 没起 OSS，把这些节点 Deactivate
-     （或者 Continue On Fail 也行，反正不挡演示流程）
+  6. 检查 N8N OSS 节点：本地模式未启动 OSS，可先将这些节点 Deactivate
+     （或者 Continue On Fail 也行，本地联调不受影响）
 
 测试触发：
   curl -X POST http://localhost:5678/webhook/trigger/image \\

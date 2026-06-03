@@ -227,7 +227,7 @@ style_id: sportwear_dynamic
 }
 ```
 
-### Few-shot 2（运动夹克 — 缩略，演示节奏）
+### Few-shot 2（运动夹克 — 缩略，节奏参考）
 
 ```json
 {

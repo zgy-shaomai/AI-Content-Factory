@@ -1,6 +1,6 @@
-# 视频生成链路设计（video-pipeline）
+# AI 内容工厂视频生成链路设计
 
-适用范围：服装电商内容工厂 — 视频链路。
+适用范围：AI 内容工厂的视频生成链路。
 首期联调样品：**YN-BRA-001 黑色高弹速干运动内衣（前拉链款）**。
 目标成片：12 秒、4 镜、TikTok 竖屏 9:16、原生口播 + 烧录字幕。
 
@@ -8,7 +8,58 @@
 
 ---
 
-## 0. 设计原则
+## 0. 模型介入说明
+
+视频链路中的模型介入比图片链路更多，而且是分层进入的。
+
+这里至少有四类“智能能力”：
+
+1. **LLM（Claude Sonnet 4.6）**  
+   负责写分镜、写关键帧 prompt、写视频 prompt。
+2. **图像模型（Seedream 4.0）**  
+   负责生成每一镜的首帧图。
+3. **视频模型（Seedance 2.0）**  
+   负责把首帧图和 prompt 变成动态视频片段。
+4. **ASR 服务**  
+   负责把音频转成字幕时间轴。
+
+因此视频链路不是“单次模型调用直接输出成片”，而是：
+
+1. 先由 LLM 生成脚本
+2. 再由 LLM 生成首帧 prompt
+3. 再由 Seedream 出关键帧
+4. 再由 LLM 生成视频 prompt
+5. 再由 Seedance 逐镜生成视频
+6. 再由 ASR / FFmpeg 生成字幕和合成成片
+
+### 0.1 各模型职责表
+
+| 模型 / 服务 | 介入环节 | 输入 | 输出 | 备注 |
+|---|---|---|---|---|
+| Claude Sonnet 4.6 | 分镜脚本生成 | 商品资料、风格模板、卖点 | 4 镜 storyboard JSON | 决定视频内容结构 |
+| Claude Sonnet 4.6 | 首帧 prompt 生成 | 单镜 storyboard、图片参考 | 关键帧英文 prompt | 给 Seedream 用 |
+| Seedream 4.0 | 首帧图生成 | 首帧 prompt、参考图 | 首帧图 URL | 给 Seedance 做锚点 |
+| Claude Sonnet 4.6 | 视频 prompt 生成 | 分镜脚本、首帧图信息 | 视频 prompt | 给 Seedance 用 |
+| Seedance 2.0 | 视频片段生成 | 视频 prompt、首帧图、尾帧图 | 单镜视频片段 | 真正产生动态内容 |
+| ASR | 字幕生成 | 音轨 | SRT / utterance 时间轴 | 非创作模型，负责转写 |
+
+### 0.2 哪些步骤不是模型在做
+
+下面这些不是模型在做：
+
+- 从 PostgreSQL 读取商品和图片池
+- 逐镜拆分和合并
+- 下载视频到本地
+- FFmpeg 拼接视频
+- 字幕烧录
+- 上传 OSS
+- 写回飞书和数据库
+
+这意味着如果问题出在“片段有了但成片没出来”，通常不是 Seedance 的问题，而是后面的下载、拼接或上传步骤有问题。
+
+---
+
+## 1. 设计原则
 
 1. **首帧驱动一致性**：每一镜的视频不是独立 text-to-video，而是 image-to-video。每镜首帧由 Seedream 4.0 生成，并与图片链路共用商品主图（白底图、人台图）作为 reference image，从而锁住模特脸型、服装版型、色号、面料质感。
 2. **首帧 + 尾帧锚定切镜**：相邻两镜之间，前一镜的尾帧用作后一镜的 prompt reference，避免穿模、换脸、变色。Seedance 2.0 pro 模型支持 `image_url`（首帧）+ `last_frame_image_url`（尾帧）双锚。
@@ -19,7 +70,7 @@
 
 ---
 
-## 1. 整体步骤图
+## 2. 整体步骤图
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -94,13 +145,13 @@
 └──────────────────────────────┬──────────────────────────────────────────┘
                                ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ S12 Postgres 写 candidates(media_type='video')；飞书多维表回写一行；飞书群消息通知 │
+│ S12 Postgres 写 video_candidates；飞书多维表回写一行；飞书群消息通知    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. 各步详细规格
+## 3. 各步详细规格
 
 ### S0 Webhook trigger
 
@@ -141,7 +192,7 @@
   ```
   POST https://ark.cn-beijing.volces.com/api/v3/images/generations
   {
-    "model": "doubao-seedream-4-0-250828",
+    "model": "doubao-seedream-4-0-250528",
     "prompt": "<生成的英文 prompt>",
     "size": "720x1280",       // 9:16
     "response_format": "url",
@@ -244,13 +295,13 @@
 
 ### S12 落库 + 飞书回写
 
-- `INSERT INTO candidates (task_id, media_type='video', oss_url, thumbnail_url, parameters_snapshot, status='pending_review') ...`。
+- `INSERT INTO video_candidates (task_id, video_url, thumb_url, storyboard_json, prompts_json, status='pending_review') ...`。
 - 飞书多维表 `bitable.record.create`：写一行候选，附预览链接。
 - 飞书群机器人：`@运营`：`{SKU} 视频 #{candidate_n} 已生成，请审核：{cdn_url}`。
 
 ---
 
-## 3. 与图片链路的资料共用
+## 4. 与图片链路的资料共用
 
 | 资料 | 图片链路产出 | 视频链路用途 |
 | --- | --- | --- |
@@ -263,7 +314,7 @@
 
 ---
 
-## 4. 字幕处理决策
+## 5. 字幕处理决策
 
 ```
 storyboard.subtitle_timing 是否人工标注精确时间码？
@@ -278,7 +329,7 @@ storyboard.subtitle_timing 是否人工标注精确时间码？
 
 ---
 
-## 5. 失败重试与降级总表
+## 6. 失败重试与降级总表
 
 | 失败点 | 第一次降级 | 第二次降级 | 兜底 |
 | --- | --- | --- | --- |
@@ -292,7 +343,7 @@ storyboard.subtitle_timing 是否人工标注精确时间码？
 
 ---
 
-## 6. 成本估算（单条 12 秒视频，2 候选）
+## 7. 成本估算（单条 12 秒视频，2 候选）
 
 按"1 元 / 秒（Seedance 2.0 pro 720p 9:16）"口径：
 
@@ -311,7 +362,7 @@ storyboard.subtitle_timing 是否人工标注精确时间码？
 
 ---
 
-## 7. 性能与产能
+## 8. 性能与产能
 
 - 单条端到端预计 4-6 分钟（Seedance 4 镜串行各 1-1.5 分钟 + 拼接 30s + 上传 10s）。
 - 4 镜 Seedance 任务可并行（去掉 S3 的 batchSize=1 改 4），端到端可压到 2-3 分钟，代价是同账号配额可能撞 RPS 限制 — 视客户方舟账号配额决定。
@@ -319,7 +370,7 @@ storyboard.subtitle_timing 是否人工标注精确时间码？
 
 ---
 
-## 8. 监控与可观测
+## 9. 监控与可观测
 
 - N8N 每个 HTTP Request 节点的 `error workflow` 统一指向 `error_handler` 子工作流，写入 `task_runs.errors`。
 - 关键指标（grafana 看板，下一阶段补）：
@@ -329,11 +380,11 @@ storyboard.subtitle_timing 是否人工标注精确时间码？
 
 ---
 
-## 9. 演示当天 checklist（YN-BRA-001）
+## 10. 验证清单（YN-BRA-001）
 
 1. `image_candidates` 至少有 3 张已 approved 的白底图与 2 张瑜伽馆场景图。
 2. `style_templates` 中 `sportwear_dynamic` 已就绪（暖光、对比度高、轻噪点）。
 3. 方舟 API key 余额 ≥ 200 元、ASR 配额 ≥ 1 万秒。
 4. OSS bucket `content-factory` 写权限通过。
 5. N8N 已 import `video-workflow.json` 并替换 4 条 credentials 引用。
-6. 演示前手动跑一条 dry-run，确认成片在飞书多维表可点开播放。
+6. 手动跑一条 dry-run，确认成片在飞书多维表可点开播放。
